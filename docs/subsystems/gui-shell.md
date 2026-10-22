@@ -7,6 +7,40 @@ with no binding generator and no bundler. `magpie web` serves the same page
 to a browser for a machine with no desktop. Package `internal/gui` hosts all
 three.
 
+## Custom fork update policy
+
+This fork's executable calls `update.ProtectCustomBuild` from `main`. The
+process-local policy in [`custom.go`](../../internal/update/custom.go) pins the
+feed to the fork's `request-update` branch and rejects official/environment-
+overridden update feeds. Only Windows x64 GUI builds with a `1.0.N` fork version
+and embedded source/upstream provenance enter the existing download/restart
+state machine; other builds retain the `custom` guide-only state.
+
+`LatestIn` reads the checksum-authoritative feed directly over HTTPS, never a
+source mirror. It validates the channel marker, provenance, exact repository,
+versioned release URL and sole supported asset before the GUI sees it. Binary
+downloads may use the existing mirror path but must match that trusted hash.
+`StageBinary` records the checksum in this process; every binary installation
+path, including elevation, rehashes the staged file against that record. A stale
+or foreign `.new` is not accepted. macOS bundle installation stays blocked.
+`jsonIn` also reports the current channel/upstream/source for the version row's
+tooltip. The CLI follows the same channel and developer-build restrictions.
+
+[`custom-release-pipeline.yml`](../../.github/workflows/custom-release-pipeline.yml)
+and [`release-custom.py`](../../build/release-custom.py) integrate stable source,
+run existing checks and publish experimental Windows x64 builds before atomically
+advancing the JSON feed. The fork's default `main` owns the source, landing
+README, workflow and publisher; `request-update` contains JSON only. The old
+`custom/request-intent` link is retained for compatibility, not used as a release
+source. Inherited official-only workflows are repository-gated.
+Code conflicts/check failures stop publication; only
+the fork's two README files have an explicit keep-fork merge policy. The
+[release-channel guide](../custom-release-channel.zh-CN.md) owns activation,
+versioning, supported platforms and recovery constraints. The existing restart,
+busy-gateway wait and binary-startup recovery are reused, not data migration
+rollback. External installers and separate official processes remain outside
+this process's protection.
+
 ## Responsibilities and sources of truth
 
 | Part | Responsibility | Source |

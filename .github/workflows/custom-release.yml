@@ -6,7 +6,7 @@ on:
     - cron: '0 0-15 * * *'
   workflow_dispatch:
   push:
-    branches: [custom/request-intent]
+    branches: [main]
 
 permissions:
   contents: write
@@ -38,4 +38,4 @@ jobs:
   release:
     needs: window
     if: needs.window.outputs.allowed == 'true'
-    uses: HwH-z1x/magpie-1/.github/workflows/custom-release-pipeline.yml@custom/request-intent
+    uses: HwH-z1x/magpie-1/.github/workflows/custom-release-pipeline.yml@main

@@ -4,6 +4,9 @@
 // works. {name} slots are filled by t(str, vars).
 const I18N = {
   zh: {
+    "Fork channel: request-intent · Upstream {v} · Source {sha}": "分支渠道：request-intent · 上游 {v} · 源码 {sha}",
+    "Development build: install a published fork release to enable restart-to-update. Official binaries are never installed.": "开发构建：安装已发布的分支版本后可使用重启更新。不会安装官方二进制。",
+    "Custom build update guide": "定制版更新说明",
     "None": "无",
     "Prompt": "提示词",
     "Request hook": "请求 Hook",
@@ -3875,6 +3878,9 @@ const I18N = {
     "Audio": "音频",
   },
   "zh-TW": {
+    "Fork channel: request-intent · Upstream {v} · Source {sha}": "分支管道：request-intent · 上游 {v} · 原始碼 {sha}",
+    "Development build: install a published fork release to enable restart-to-update. Official binaries are never installed.": "開發建置：安裝已發布的分支版本後即可使用重新啟動更新。不會安裝官方執行檔。",
+    "Custom build update guide": "自訂版更新說明",
     "None": "無",
     "Prompt": "提示詞",
     "Request hook": "請求 Hook",
@@ -7731,6 +7737,9 @@ const I18N = {
     "Audio": "音訊",
   },
   ja: {
+    "Fork channel: request-intent · Upstream {v} · Source {sha}": "フォーク配信: request-intent · 上流 {v} · ソース {sha}",
+    "Development build: install a published fork release to enable restart-to-update. Official binaries are never installed.": "開発ビルドです。公開済みのフォーク版をインストールすると再起動で更新できます。公式バイナリはインストールしません。",
+    "Custom build update guide": "カスタム版の更新手順",
     "None": "なし",
     "Prompt": "プロンプト",
     "Request hook": "リクエストフック",
@@ -11589,6 +11598,9 @@ const I18N = {
     "Audio": "音声",
   },
   de: {
+    "Fork channel: request-intent · Upstream {v} · Source {sha}": "Fork-Kanal: request-intent · Upstream {v} · Quellcode {sha}",
+    "Development build: install a published fork release to enable restart-to-update. Official binaries are never installed.": "Entwicklungsbuild: Eine veröffentlichte Fork-Version ermöglicht Updates per Neustart. Offizielle Binärdateien werden nie installiert.",
+    "Custom build update guide": "Update-Anleitung für diesen Build",
     "None": "Keine",
     "Prompt": "Prompt",
     "Request hook": "Anfrage-Hook",

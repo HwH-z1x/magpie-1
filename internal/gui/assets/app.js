@@ -23299,6 +23299,7 @@ async function renderUpdate(r, u) {
     if (!u || !r.isConnected || (updateSeq.get(r) || 0) !== seq) return;
   } else if (!r.isConnected) return;
   const who = r.querySelector(".who"), val = r.querySelector(".val");
+  r.title = u.channel === "request-intent" ? t("Fork channel: request-intent · Upstream {v} · Source {sha}", { v: u.upstreamVersion, sha: (u.sourceCommit || "").slice(0, 12) }) : "";
   const sub = who.querySelector(".sub") || who.appendChild(el("div", "sub"));
   sub.title = "";
   sub.classList.remove("wraps");
@@ -23351,6 +23352,11 @@ async function renderUpdate(r, u) {
     setTimeout(() => { if (r.isConnected && (updateSeq.get(r) || 0) === seen) renderUpdate(r); }, ms);
   };
   switch (u.state) {
+    case "custom":
+      sub.textContent = t("Development build: install a published fork release to enable restart-to-update. Official binaries are never installed.");
+      sub.classList.add("wraps");
+      if (u.url) btn(t("Custom build update guide"), () => (web ? window.open(u.url, "_blank", "noopener") : api("open", { url: u.url })));
+      break;
     case "ready": {
       sub.textContent = t("{v} is downloaded", { v: u.latest }) + (u.error ? " · " + u.error : "");
       // a failed install says why in full, and offers the release page to

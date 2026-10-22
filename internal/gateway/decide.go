@@ -192,6 +192,9 @@ func jevState(prev before, effort bool, text string) map[string]string {
 }
 
 func intentAsk(prev before) string {
+	if prev.request {
+		return "Which kind best fits the assistant's next step in the execution state in `message`?" + requestClassifyPrompt + priorAsk(prev)
+	}
 	q := "The `message` is what a user asked a coding assistant. Which kind of request fits it best?"
 	if prev.Intent != "" {
 		q += " A message that only carries on from the user's message before it (go on, yes, do it, fix that) is of `previous_message_kind`; one that asks for something of its own is of the kind that fits it."
@@ -226,6 +229,9 @@ func levelAsk(prev before, work bool) string {
 }
 
 func effortAsk(prev before) string {
+	if prev.request {
+		return "How much reasoning does the assistant's next step in `message` need?" + requestClassifyPrompt + priorAsk(prev)
+	}
 	q := "How much reasoning does a coding assistant need to handle the `message` well?"
 	if prev.Effort != "" {
 		q += " A message that only carries on from the user's message before it (go on, yes, do it) needs what that one did, `previous_message_reasoning` (low, medium, high or xhigh)."
@@ -352,7 +358,7 @@ func (s *Server) jevLevelled(ctx context.Context, p provider.Provider, model str
 
 // askJev asks a decision provider's model through its System One API.
 func (s *Server) askJev(p provider.Provider, model string, intents []string, prev before, effort bool, text string) (verdict, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), classifyTimeout)
+	ctx, cancel := context.WithTimeout(classifierContext(prev), classifyTimeout)
 	defer cancel()
 	if model == "" {
 		model = p.Jev()

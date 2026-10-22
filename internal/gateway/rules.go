@@ -1,10 +1,10 @@
 package gateway
 
 // A group's rules (provider.Rule) put one member first for the requests
-// they match. A rule is looked at when a user's turn begins, and what it
+// they match. By default a rule is looked at when a user's turn begins, and what it
 // decided holds for the rest of the turn: the agent's tool results go back
 // to the model that asked for them, however long the conversation grows
-// meanwhile.
+// meanwhile. Request scope instead decides afresh on every request.
 
 import (
 	"crypto/sha256"
@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yetone/magpie/internal/provider"
@@ -25,10 +26,11 @@ var ruleClock = time.Now
 
 // RuleHit is what the trace tells of a group's rules for a request.
 type RuleHit struct {
-	N    int      `json:"n"`             // the rule, from 1; 0 when none matched
-	Use  string   `json:"use,omitempty"` // the member it puts first
-	When []string `json:"when,omitempty"`
-	Held bool     `json:"held,omitempty"` // decided when the turn began
+	PerRequest bool     `json:"perRequest,omitempty"`
+	N          int      `json:"n"`             // the rule, from 1; 0 when none matched
+	Use        string   `json:"use,omitempty"` // the member it puts first
+	When       []string `json:"when,omitempty"`
+	Held       bool     `json:"held,omitempty"` // decided when the turn began
 	// Waits: the turn began before magpie saw it (or its rule was changed
 	// since), so no rule moves it; the next turn is looked at afresh
 	Waits bool `json:"waits,omitempty"`
@@ -79,16 +81,18 @@ type RuleHit struct {
 
 // Classified is what the classifier was asked as a turn began, and said.
 type Classified struct {
-	By      string   `json:"by"`               // the classifier model
-	Intents []string `json:"intents"`          // what it chose among
-	Intent  string   `json:"intent,omitempty"` // what it said the message is; "" for none
-	After   string   `json:"after,omitempty"`  // what it said the turn before was, which it was told
-	Effort  string   `json:"effort,omitempty"` // the reasoning it said the turn wants
-	Score   float64  `json:"score,omitempty"`  // how hard it took the turn to be, 0 (low) to 3 (xhigh)
-	Sure    float64  `json:"sure,omitempty"`   // how confident it was of the intent, 0 to 1
-	Cached  bool     `json:"cached,omitempty"` // said before, for the same message
-	Ms      int      `json:"ms,omitempty"`     // how long asking it took
-	Error   string   `json:"error,omitempty"`  // why it couldn't say: no intent matches then, unless Fallback
+	Attempted bool     `json:"attempted,omitempty"`
+	Truncated bool     `json:"truncated,omitempty"`
+	By        string   `json:"by"`               // the classifier model
+	Intents   []string `json:"intents"`          // what it chose among
+	Intent    string   `json:"intent,omitempty"` // what it said the message is; "" for none
+	After     string   `json:"after,omitempty"`  // what it said the turn before was, which it was told
+	Effort    string   `json:"effort,omitempty"` // the reasoning it said the turn wants
+	Score     float64  `json:"score,omitempty"`  // how hard it took the turn to be, 0 (low) to 3 (xhigh)
+	Sure      float64  `json:"sure,omitempty"`   // how confident it was of the intent, 0 to 1
+	Cached    bool     `json:"cached,omitempty"` // said before, for the same message
+	Ms        int      `json:"ms,omitempty"`     // how long asking it took
+	Error     string   `json:"error,omitempty"`  // why it couldn't say: no intent matches then, unless Fallback
 	// Fallback: "previous" when it couldn't say and the turn keeps the
 	// intent the turn before had (After), rather than none
 	Fallback string `json:"fallback,omitempty"`
@@ -98,11 +102,12 @@ type Classified struct {
 }
 
 type turnRule struct {
-	turn  int
-	use   string // "" when no rule matched
-	n     int
-	at    time.Time
-	input int // the tokens the vendor counted the conversation's last request as
+	requestAt uint64
+	turn      int
+	use       string // "" when no rule matched
+	n         int
+	at        time.Time
+	input     int // the tokens the vendor counted the conversation's last request as
 	// intent is what the classifier said the turn's first message is
 	intent string
 	effort string // the reasoning it picked for the turn
@@ -120,6 +125,8 @@ var turnRules = struct {
 	sync.Mutex
 	m map[string]turnRule // group|conversation → what its turn's rule was
 }{m: map[string]turnRule{}}
+
+var requestRuleSequence atomic.Uint64
 
 // ruleKey is the conversation a group's rules keep a turn's decision for:
 // the agent's session and the conversation's first words (firstWords).
@@ -174,6 +181,11 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 		return nil
 	}
 	turn, within := turnIn(req)
+	perRequest := g.RuleScope == provider.RuleScopeRequest && g.Routing != provider.Manual
+	var requestAt uint64
+	if perRequest {
+		requestAt = requestRuleSequence.Add(1)
+	}
 	now := ruleClock()
 	size := estimate(req)
 	q := provider.RuleRequest{Tokens: size, Thinking: req.Thinking, Effort: req.Effort, Agent: agent, At: now}
@@ -195,7 +207,7 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 	if slices.ContainsFunc(g.Rules, provider.Rule.ByFolder) {
 		q.Folder = workDir(req)
 	}
-	hit := &RuleHit{Turn: turn, Tokens: q.Tokens, Images: q.Images, Effort: q.Effort, Folder: q.Folder, Bare: len(g.Rules) == 0}
+	hit := &RuleHit{PerRequest: perRequest, Turn: turn, Tokens: q.Tokens, Images: q.Images, Effort: q.Effort, Folder: q.Folder, Bare: len(g.Rules) == 0}
 	defer func() {
 		// whatever put a member first, the rules after it that match too
 		// say who comes next
@@ -209,7 +221,8 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 	if hit.Effort == "" && q.Thinking {
 		hit.Effort = "on"
 	}
-	if slices.ContainsFunc(g.Rules, func(r provider.Rule) bool { return r.Compact }) && compacting(req) {
+	compact := slices.ContainsFunc(g.Rules, func(r provider.Rule) bool { return r.Compact }) && compacting(req)
+	if compact && !perRequest {
 		// the agent summarizing its conversation: the first rule it matches,
 		// on its own — not the turn's decision, so the requests after it go
 		// on as the turn would. The request is as long as the conversation:
@@ -229,7 +242,7 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 		}
 		return hit
 	}
-	if within {
+	if within && !perRequest {
 		// the same turn: what was decided as it began, while the group
 		// still has that rule; else nothing moves it
 		ctx := memberContexts(ms) // before the lock: it reads the catalog
@@ -270,13 +283,16 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 	// which Effort reads as low) is not asked to reason: the pick would
 	// never be sent (withEffort leaves "none" as it is), only shown (#2247)
 	intents := provider.Intents(g.Rules, q)
+	if perRequest {
+		intents = requestIntents(g.Rules)
+	}
 	effort := g.Effort == provider.EffortAuto && hit.Effort != "" && !req.ThinkOff
 	if len(intents) > 0 || effort {
 		c := &Classified{By: g.Classifier, Intents: intents}
 		if had && slices.Contains(intents, tr.intent) {
 			c.After = tr.intent // a message that only carries on is of its kind
 		}
-		prev := before{Intent: c.After}
+		prev := before{Intent: c.After, request: perRequest}
 		if had && effort {
 			prev.Effort = tr.effort // and needs the reasoning it had
 			c.AfterEffort = tr.effort
@@ -285,6 +301,12 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 		// what was said before it, for a follow-up that says little of
 		// its own (@HirotaNagai on X): from the same parsed, masked request
 		prev.User, prev.Reply = turnBefore(req)
+		if perRequest {
+			text, c.Truncated = requestText(req)
+			// The last decision is a failure fallback, not an instruction to
+			// repeat the original task's kind on every tool continuation.
+			prev.Intent, prev.Effort = "", ""
+		}
 		switch {
 		case g.Classifier == "":
 			c.Error = "the group has no classifier"
@@ -293,6 +315,7 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 		case text == "":
 			c.Error = "the message has no words to classify"
 		default:
+			c.Attempted = perRequest
 			t0 := time.Now()
 			v, cached, err := classify(ask, g.Classifier, intents, prev, effort, text)
 			c.Intent, c.Cached, c.Ms = v.Intent, cached, int(time.Since(t0).Milliseconds())
@@ -319,6 +342,22 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 			hit.Pick, hit.Wanted = tr.effort, c.Effort
 		}
 	}
+	if compact && perRequest {
+		q.Compact, hit.Compact = true, true
+		ctx := memberContexts(ms)
+		for i, r := range g.Rules {
+			if !r.Matches(q) {
+				continue
+			}
+			if n := ctx[r.Use]; n > 0 && n < q.Tokens {
+				hit.Small = append(hit.Small, r.Use)
+				continue
+			}
+			hit.N, hit.Use, hit.When = i+1, r.Use, r.Conditions()
+			break
+		}
+		return hit
+	}
 	if i := provider.MatchRule(g.Rules, q); i >= 0 {
 		hit.N, hit.Use, hit.When = i+1, g.Rules[i].Use, g.Rules[i].Conditions()
 	}
@@ -326,9 +365,12 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 	defer turnRules.Unlock()
 	input, answered, hour := tr.input, tr.answered, tr.hour
 	if cur, ok := turnRules.m[key]; ok {
+		if perRequest && cur.requestAt > requestAt {
+			return hit // an older in-flight request must not replace newer state
+		}
 		input, answered, hour = cur.input, cur.answered, cur.hour // answered while the classifier was asked
 	}
-	turnRules.m[key] = turnRule{turn: turn, use: hit.Use, n: hit.N, at: now, input: input, intent: q.Intent, effort: hit.Pick, wanted: hit.Wanted, answered: answered, size: size, hour: hour}
+	turnRules.m[key] = turnRule{requestAt: requestAt, turn: turn, use: hit.Use, n: hit.N, at: now, input: input, intent: q.Intent, effort: hit.Pick, wanted: hit.Wanted, answered: answered, size: size, hour: hour}
 	if len(turnRules.m) > 4096 {
 		for k, tr := range turnRules.m {
 			if now.Sub(tr.at) > stickKeep {

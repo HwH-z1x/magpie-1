@@ -78,12 +78,15 @@ type updater struct {
 }
 
 type updateJSON struct {
-	State   string `json:"state"`
-	Current string `json:"current"`
-	Latest  string `json:"latest,omitempty"`
-	Notes   string `json:"notes,omitempty"`
-	URL     string `json:"url,omitempty"`
-	Stuck   string `json:"stuck,omitempty"` // available: why it can't update itself
+	State           string `json:"state"`
+	Current         string `json:"current"`
+	Channel         string `json:"channel,omitempty"`
+	UpstreamVersion string `json:"upstreamVersion,omitempty"`
+	SourceCommit    string `json:"sourceCommit,omitempty"`
+	Latest          string `json:"latest,omitempty"`
+	Notes           string `json:"notes,omitempty"`
+	URL             string `json:"url,omitempty"`
+	Stuck           string `json:"stuck,omitempty"` // available: why it can't update itself
 	// available, stuck "not-writable": the folder magpie may not write to
 	StuckDir string `json:"stuckDir,omitempty"`
 	Retry    bool   `json:"retry,omitempty"` // error: a click downloads it again
@@ -117,6 +120,12 @@ func updateDue(s settings.Settings, last, now time.Time) bool {
 }
 
 func (u *updater) start() {
+	if update.CustomBuild() && !update.CustomUpdates(Version) {
+		u.mu.Lock()
+		u.state = "custom"
+		u.mu.Unlock()
+		return
+	}
 	u.place(runtime.GOOS, update.GUI)
 	go func() {
 		time.Sleep(5 * time.Second) // let the app settle first
@@ -269,6 +278,10 @@ func (u *updater) freshen() {
 func (u *updater) begin() bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if update.CustomBuild() && !update.CustomUpdates(Version) {
+		u.state = "custom"
+		return false
+	}
 	if u.state == "checking" || u.state == "downloading" {
 		return false
 	}
@@ -277,6 +290,9 @@ func (u *updater) begin() bool {
 }
 
 func (u *updater) run() {
+	if update.CustomBuild() && !update.CustomUpdates(Version) {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	s := settings.Load()
@@ -374,6 +390,9 @@ func (u *updater) run() {
 func (u *updater) install(ask bool) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if update.CustomBuild() && !update.CustomUpdates(Version) {
+		return false
+	}
 	if u.replaced() {
 		// another magpie updated the binary after this one started: it is
 		// in, and swapping this one's download in would move it aside (the
@@ -448,6 +467,9 @@ func (u *updater) json() updateJSON { return u.jsonIn("") }
 // Notes held in another language are asked for again in lang, at most
 // once a minute; the page's next look has them.
 func (u *updater) jsonIn(lang string) updateJSON {
+	if update.CustomBuild() && !update.CustomUpdates(Version) {
+		return updateJSON{State: "custom", Current: Version, URL: update.CustomUpdateGuide}
+	}
 	busy := gatewayBusy()
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -459,6 +481,9 @@ func (u *updater) jsonIn(lang string) updateJSON {
 		}
 	}
 	j := updateJSON{State: u.state, Current: Version, Error: u.err, Retry: u.retry}
+	if update.CustomBuild() {
+		j.Channel, j.UpstreamVersion, j.SourceCommit = "request-intent", update.UpstreamVersion, update.SourceCommit
+	}
 	if u.state == "error" {
 		j.Mirror = u.mirror
 	}

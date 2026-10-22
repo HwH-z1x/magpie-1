@@ -20,6 +20,7 @@ on:
 
 jobs:
   trigger-release:
+    if: github.repository == 'yetone/magpie'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -57,6 +58,7 @@ jobs:
         run: echo "Watch the build at https://github.com/yetone/magpie-releases/actions"
 
   mirror-release:
+    if: github.repository == 'yetone/magpie'
     needs: trigger-release
     runs-on: ubuntu-latest
     timeout-minutes: 75

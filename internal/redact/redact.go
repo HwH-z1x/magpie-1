@@ -585,7 +585,7 @@ func mask(s string, o Options, put func(kind, v string) string) (string, int) {
 	// kind it has always had
 	found = append(found, modelSpans(s, o)...)
 	found = append(found, knownSpans(s, o)...)
-	return apply(s, found, put, o)
+	return apply(s, noIDs(s, found), put, o)
 }
 
 // by is the finder r is, for Hit.By.
