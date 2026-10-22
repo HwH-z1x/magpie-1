@@ -4,7 +4,7 @@
 
 [简体中文](README.md) · [Download Windows builds](https://github.com/HwH-z1x/magpie-1/releases?q=request-v&expanded=true) · [Build status](https://github.com/HwH-z1x/magpie-1/actions/workflows/custom-release.yml) · [Operation guide (ZH)](docs/custom-request-routing.zh-CN.md) · [Release channel guide (ZH)](docs/custom-release-channel.zh-CN.md) · [Validation record](docs/custom-request-routing-validation.md) · [Upstream Magpie](https://github.com/yetone/magpie)
 
-This unofficial Magpie fork adds **per-request intent routing** for multi-step coding agents such as Codex, Claude Code, and OpenCode. Upstream Magpie classifies intent once at the start of a user turn and keeps subsequent tool requests on that initial decision. This fork adds a **Per turn / Per request** rule-evaluation switch to routing groups while preserving existing classifiers, rule priority, nested groups, failover, and live routing traces—without external plugins or splitting work into subagents.
+This unofficial Magpie fork adds **per-request intent routing** for multi-step coding agents such as Codex, Claude Code, and OpenCode. In the upstream revision this fork is based on, same-turn tool requests normally reuse the intent decision made at the start of the turn; existing failover and context-limit handling still apply. This fork adds a **Per turn / Per request** rule-evaluation switch to routing groups while preserving existing classifiers, rule priority, nested groups, failover, and live routing traces—without external plugins or splitting work into subagents.
 
 ## Why turning off session affinity or using subagents is not enough
 
@@ -28,12 +28,12 @@ Upstream Magpie routes a subagent turn separately based on the subagent's own in
 
 | Dimension | Subagent routing | Per-request intent routing (this fork) |
 | --- | --- | --- |
-| **Main agent mid-turn switching** | **No.** Both the main agent and each subagent stay locked to their turn-start model across their own tool loops | **Yes.** Every generation request in the main agent's (or subagent's) tool loop can switch models mid-turn |
-| **Trigger mechanism** | **Requires explicit delegation.** Only triggers when the main agent decides to spawn a subagent; ordinary read/edit/test loops stay on the initial model | **Driven by real execution state.** Automatically inspects the task plus up to 12 recent tool calls, results, and `error` flags before each request |
-| **Context continuity** | **Split across sessions.** Spawning subagents creates separate contexts and requires summarizing state back and forth | **Single continuous conversation.** Switches models transparently at the gateway layer within one shared conversation history |
+| **Main agent mid-turn switching** | Delegating to a subagent does not reclassify the main agent’s tool loop. Each subagent also follows upstream turn-level routing, including its failover and context-limit handling | **Yes.** Every generation request in the main agent's (or subagent's) tool loop can switch models mid-turn |
+| **Trigger mechanism** | **Requires explicit delegation.** Only triggers when the main agent decides to spawn a subagent; ordinary tool loops normally reuse the turn’s intent decision | **Driven by real execution state.** Automatically inspects the task plus up to 12 recent tool calls, results, and `error` flags before each request |
+| **Context continuity** | Separate contexts isolate side tasks; handoff details depend on the agent’s subagent implementation | **Single continuous conversation.** Switches models transparently at the gateway layer within one shared conversation history |
 | **Setup overhead** | Requires agent-specific subagent support and custom subagent prompts | **Gateway-level switch.** Enable once on a Magpie routing group for any connected agent |
 
-**Tradeoffs:** Subagents isolate verbose intermediate output in a separate context window, whereas per-request routing switches models within the same context. Per-request classification adds one lightweight classifier call per request, and mid-turn model switches can reduce prompt-cache hits or encounter provider-specific history/reasoning constraints. Both approaches can be used together.
+**Tradeoffs:** Subagents isolate verbose intermediate output in a separate context window, whereas per-request routing switches models within the same context. Per-request classification adds one classifier call per request, and mid-turn model switches can reduce prompt-cache hits or encounter provider-specific history/reasoning constraints. Both approaches can be used together.
 
 ## Enable per-request classification
 

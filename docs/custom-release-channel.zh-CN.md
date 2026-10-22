@@ -2,18 +2,18 @@
 
 ## 更新的是什么
 
-客户端始终下载“上游正式版源码 + 本分支修改”编译后的完整程序，不下载官方 exe 再补丁。当前只发布 Windows x64 桌面版，渠道为 `request-intent`，属于实验发行；不声称完整套件、真实供应商跨模型续接或数据回滚已经认证。检查范围和未验项目随每个 Release 的 `build.json` 一起公开。
+客户端每次更新下载的都是“上游正式版源码 + 本分支修改”重新编译后的完整程序，而不是下载官方 exe 再打补丁。当前仅发布 Windows x64 桌面版，更新渠道标识为 `request-intent`（实验发行）。每个 Release 附带的 `build.json` 会公开当次构建已执行的检查范围与未验项目。
 
-Windows x64 实验发行版已发布，首个可用版本为 `1.0.2`。请先检查 [Actions](https://github.com/HwH-z1x/magpie-1/actions/workflows/custom-release.yml) 和 [分支 Releases](https://github.com/HwH-z1x/magpie-1/releases?q=request-v&expanded=true)，不要安装原版来代替缺失的分支包。
+Windows x64 发行版已在 [分支 Releases](https://github.com/HwH-z1x/magpie-1/releases?q=request-v&expanded=true) 持续发布，构建记录可在 [Actions](https://github.com/HwH-z1x/magpie-1/actions/workflows/custom-release.yml) 查看。请勿用官方原版安装包替代分支发行包。
 
 ## 用户操作
 
-1. 从带 `request-v` 前缀的分支 Release 下载 `magpie-windows-amd64.exe`，核对同页 `SHA256SUMS`，退出原版并备份数据。
-2. 将 exe 放在专属目录，可以改名为 `magpie-custom.exe`。如需独立配置，在旁边创建 `.portable`；这不会自动迁移原账号。
-3. 第一次从原版、旧受保护开发版切换需手动替换。之后使用原有“检查 / 下载 / 重启更新”按钮即可，不需要 Git 或 Go。
-4. 版本行的悬停提示显示分支渠道、上游版本和源码提交；发行说明也记录它们。不要把分支 `1.0.N` 当成上游的版本号。
+1. 从带 `request-v` 前缀的分支 Release 下载 `magpie-windows-amd64.exe`，核对同页 `SHA256SUMS`，先退出原版并备份数据。
+2. 将 exe 放到专属目录（可改名为 `magpie-custom.exe`）。如需隔离配置，在同目录新建 `.portable` 文件；便携模式不会自动迁移原有账号。
+3. 首次从原版或本地开发版切换时需手动替换一次。之后直接在软件内点击“检查 / 下载 / 重启更新”即可，本机无需安装 Git 或 Go。
+4. 设置页版本行的悬停提示与 Release 说明都会标注分支渠道、对应的上游版本号和源码提交。分支版本号 `1.0.N` 独立递增，不等同于上游版本号。
 
-保留既有自动检查频率、仅通知/自动下载、网关忙时等待等设置。不同名的本地 exe 仍按本机 GUI 平台对应的资产名更新。开发构建（如 `custom-<sha>`）、元数据不完整的构建和其他平台继续显示手动维护说明。
+原有的自动检查频率、仅通知或自动下载、网关忙时等待等设置保持不变。即使修改了本地 exe 文件名，更新器仍会按当前 GUI 平台匹配对应的发行资产。开发构建（如 `custom-<sha>`）、元数据不完整的构建及其他平台仍显示手动维护说明。
 
 ## 分支布局
 
@@ -24,7 +24,7 @@ Windows x64 实验发行版已发布，首个可用版本为 `1.0.2`。请先检
 
 ## GitHub 维护流程
 
-入口为 `.github/workflows/custom-release.yml`：北京时间每天 **08:00–23:00 每小时整点**检查一次，00:00–08:00 不自动检查。维护分支有新提交也会触发，但同样遵守夜间静默；手动运行不受此限制。GitHub 可能延迟调度，入口和实际查询前都会复核时段。已开始的构建不因跨过午夜而强制中断。默认 `main` 同时承载修改版源码、首页 README、调度入口和可复用构建流水线。更新脚本只推进 `main`；不再把一个原版镜像作为仓库首页。
+自动发布入口为 `.github/workflows/custom-release.yml`：北京时间每天 **08:00–23:00 每小时整点**检查一次，00:00–08:00 暂停自动检查。`main` 分支有新提交时也会触发，并遵守相同的夜间静默规则；手动触发（`workflow_dispatch`）不受时段限制。由于 GitHub 定时调度可能存在延迟，工作流在入口和查询前都会复核北京时间，但已启动的构建不会因跨过午夜而中断。
 
 仓库须启用 Actions，允许本仓库工作流请求 `contents: write`。只使用内置 `GITHUB_TOKEN`，不需要个人 PAT、官方签名密钥或租用服务器。GitHub 对 fork、可复用工作流和第三方 Actions 的仓库/组织限制仍适用。定时任务只由默认分支触发；长时间无仓库活动时也可能被 GitHub 停用，可从 Actions 重新启用。
 
