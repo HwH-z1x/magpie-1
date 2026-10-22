@@ -1,16 +1,16 @@
 {
-  "version": "1.0.4",
+  "version": "1.0.5",
   "channel": "request-intent",
-  "notes": "Upstream: [v0.1.1319](https://github.com/yetone/magpie-releases/releases/tag/v0.1.1319) (`86254d4049cb6be4a2ccdab02edf0bd59860c603`). Fork source: `f2f2280e68b616e212fddcdfe05092d9901f11f0`.\n\nIncludes per-request intent classification within tool loops and fork-only restart updates. Experimental Windows x64 distribution; see the validation record. Full-suite, real-provider cross-model continuation and configuration rollback are not certified.\n\n<!-- lang:zh -->\n基于上游 [v0.1.1319](https://github.com/yetone/magpie-releases/releases/tag/v0.1.1319)，上游提交 `86254d4049cb6be4a2ccdab02edf0bd59860c603`，分支源码 `f2f2280e68b616e212fddcdfe05092d9901f11f0`。\n\n保留同轮工具循环内每请求意图判断，并只从本分支下载重启更新。这是 Windows x64 实验发行版；完整套件、真实供应商跨模型续接和配置回滚尚未完成认证。请阅读[验证记录](https://github.com/HwH-z1x/magpie-1/blob/f2f2280e68b616e212fddcdfe05092d9901f11f0/docs/custom-request-routing-validation.md)。",
-  "url": "https://github.com/HwH-z1x/magpie-1/releases/tag/request-v1.0.4",
-  "upstreamVersion": "v0.1.1319",
-  "upstreamCommit": "86254d4049cb6be4a2ccdab02edf0bd59860c603",
-  "sourceCommit": "f2f2280e68b616e212fddcdfe05092d9901f11f0",
+  "notes": "Upstream: [v0.1.1320](https://github.com/yetone/magpie-releases/releases/tag/v0.1.1320) (`46176fc14f3104a16d880d1dfd3646aa84688022`). Fork source: `29246d23f6eb96f19e81727a41a58e3156b9783d`.\n\nIncludes per-request intent classification within tool loops and fork-only restart updates. Experimental Windows x64 distribution; see the validation record. Full-suite, real-provider cross-model continuation and configuration rollback are not certified.\n\n<!-- lang:zh -->\n基于上游 [v0.1.1320](https://github.com/yetone/magpie-releases/releases/tag/v0.1.1320)，上游提交 `46176fc14f3104a16d880d1dfd3646aa84688022`，分支源码 `29246d23f6eb96f19e81727a41a58e3156b9783d`。\n\n保留同轮工具循环内每请求意图判断，并只从本分支下载重启更新。这是 Windows x64 实验发行版；完整套件、真实供应商跨模型续接和配置回滚尚未完成认证。请阅读[验证记录](https://github.com/HwH-z1x/magpie-1/blob/29246d23f6eb96f19e81727a41a58e3156b9783d/docs/custom-request-routing-validation.md)。",
+  "url": "https://github.com/HwH-z1x/magpie-1/releases/tag/request-v1.0.5",
+  "upstreamVersion": "v0.1.1320",
+  "upstreamCommit": "46176fc14f3104a16d880d1dfd3646aa84688022",
+  "sourceCommit": "29246d23f6eb96f19e81727a41a58e3156b9783d",
   "assets": {
     "magpie-windows-amd64.exe": {
-      "url": "https://github.com/HwH-z1x/magpie-1/releases/download/request-v1.0.4/magpie-windows-amd64.exe",
-      "size": 57348096,
-      "sha256": "7919c9352eb5694b650055e6650f127d84fcef551b9ef3b0774cab4cac10fa5f"
+      "url": "https://github.com/HwH-z1x/magpie-1/releases/download/request-v1.0.5/magpie-windows-amd64.exe",
+      "size": 57367040,
+      "sha256": "5f6321bfe2889ef48e8e5a189d5998f8d698f708457d3dc0d8fd484001c09596"
     }
   }
 }
