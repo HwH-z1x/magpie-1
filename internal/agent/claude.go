@@ -315,7 +315,8 @@ const claudeReviewEnv = "CLAUDE_CODE_AUTO_MODE_SERVER"
 const claudeExploreEnv = "CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP"
 
 // claudeReviewed reports whether a model Claude Code can reach through
-// magpie has its actions reviewed by Anthropic (gateway.AutoModeReviewed):
+// magpie has its actions reviewed by Anthropic (gateway.AutoModeReviewable:
+// a Claude model asked on the Messages API, not translated):
 // one shown to the agents in catalogs (Claude Code, Claude Desktop whose
 // Code tab is Claude Code, T3 Code's instance of it), a routing group's
 // member, a provider's fallback, or one of models (those it is set to),
@@ -328,12 +329,12 @@ func claudeReviewed(catalogs []string, models ...string) bool {
 		entries = append(entries, shown...)
 	}
 	reviewed := func(p provider.Provider, model string) bool {
-		if gateway.AutoModeReviewed(p, model) {
+		if gateway.AutoModeReviewable(p, model) {
 			return true
 		}
 		return slices.ContainsFunc(p.Fallback, func(id string) bool {
 			fp, fm, ok := provider.Resolve(id)
-			return ok && gateway.AutoModeReviewed(fp, fm)
+			return ok && gateway.AutoModeReviewable(fp, fm)
 		})
 	}
 	find := provider.GroupFinder()

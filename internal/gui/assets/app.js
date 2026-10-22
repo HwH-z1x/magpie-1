@@ -23888,10 +23888,12 @@ function hold(h) {
     // what was clicked moves it down rather than scrolling the view to follow
     // it. Turning automatic updates off grew the Version row above the
     // switch once the save answered, and the view slid 2px off its top (#2134).
-    // Only while what was clicked stays under the pointer, moved by less than
-    // half its height: a day picked on Routing brings its stage in above the
-    // bar (~138px), and the bar is held where it was clicked (#961)
-    if (h.top && want > 0 && Math.abs(d) < a[0].getBoundingClientRect().height / 2) want = 0;
+    // Only while what was clicked moved by less than its height, a line come
+    // in above it: a day picked on Routing brings its stage in above the bar
+    // (~138px), and the bar is held where it was clicked (#961). Half its
+    // height was too little once a settings row kept 12px above and below its
+    // words: the Version row's line grew it 12px past a 22px switch (10-22)
+    if (h.top && want > 0 && Math.abs(d) < a[0].getBoundingClientRect().height) want = 0;
     // a view at its top when clicked stays there rather than be given room
     // to scroll down: a chip saved in the panel's Profiles came in above the
     // button held, and room made for the button slid the chip up under the
