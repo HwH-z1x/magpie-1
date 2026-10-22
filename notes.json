@@ -1,6 +1,11 @@
 {
   "releases": [
     {
+      "version": "1.0.4",
+      "notes": "Upstream: [v0.1.1319](https://github.com/yetone/magpie-releases/releases/tag/v0.1.1319) (`86254d4049cb6be4a2ccdab02edf0bd59860c603`). Fork source: `f2f2280e68b616e212fddcdfe05092d9901f11f0`.\n\nIncludes per-request intent classification within tool loops and fork-only restart updates. Experimental Windows x64 distribution; see the validation record. Full-suite, real-provider cross-model continuation and configuration rollback are not certified.\n\n<!-- lang:zh -->\n基于上游 [v0.1.1319](https://github.com/yetone/magpie-releases/releases/tag/v0.1.1319)，上游提交 `86254d4049cb6be4a2ccdab02edf0bd59860c603`，分支源码 `f2f2280e68b616e212fddcdfe05092d9901f11f0`。\n\n保留同轮工具循环内每请求意图判断，并只从本分支下载重启更新。这是 Windows x64 实验发行版；完整套件、真实供应商跨模型续接和配置回滚尚未完成认证。请阅读[验证记录](https://github.com/HwH-z1x/magpie-1/blob/f2f2280e68b616e212fddcdfe05092d9901f11f0/docs/custom-request-routing-validation.md)。",
+      "url": "https://github.com/HwH-z1x/magpie-1/releases/tag/request-v1.0.4"
+    },
+    {
       "version": "1.0.2",
       "notes": "Upstream: [v0.1.1319](https://github.com/yetone/magpie-releases/releases/tag/v0.1.1319) (`86254d4049cb6be4a2ccdab02edf0bd59860c603`). Fork source: `dad0ae7ed3164ba5e952202b99882f01cccccadc`.\n\nIncludes per-request intent classification within tool loops and fork-only restart updates. Experimental Windows x64 distribution; see the validation record. Full-suite, real-provider cross-model continuation and configuration rollback are not certified.\n\n<!-- lang:zh -->\n基于上游 [v0.1.1319](https://github.com/yetone/magpie-releases/releases/tag/v0.1.1319)，上游提交 `86254d4049cb6be4a2ccdab02edf0bd59860c603`，分支源码 `dad0ae7ed3164ba5e952202b99882f01cccccadc`。\n\n保留同轮工具循环内每请求意图判断，并只从本分支下载重启更新。这是 Windows x64 实验发行版；完整套件、真实供应商跨模型续接和配置回滚尚未完成认证。请阅读[验证记录](https://github.com/HwH-z1x/magpie-1/blob/dad0ae7ed3164ba5e952202b99882f01cccccadc/docs/custom-request-routing-validation.md)。",
       "url": "https://github.com/HwH-z1x/magpie-1/releases/tag/request-v1.0.2"
