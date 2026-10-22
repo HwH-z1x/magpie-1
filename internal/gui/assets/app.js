@@ -7642,6 +7642,7 @@ function providerDraftValue() {
 function providerDirty() {
   // Price boxes parse on change; a page closed while typing hasn't blurred one yet.
   const active = document.activeElement;
+  if (accountModelsDraft(providers?.providers?.find((p) => p.id === editing)) !== null) return true;
   return !!draft && draft === providerDraftRef && (providerDraftValue() !== providerDraftBase ||
     (active?.matches(".editor .mprice input") && active.value !== active.defaultValue));
 }
@@ -7715,7 +7716,7 @@ function confirmDiscard() {
 async function cancelEdit(keep) {
   if ((providerDirty() || ((importing || importingApps) && modalFormDirty())) && !(await confirmDiscard())) return false;
   if (keep !== true) dropSigningIn(editing);
-  editing = null; draft = null; importing = null; importingApps = null; renderProviders();
+  editing = null; draft = null; acctModels = null; importing = null; importingApps = null; renderProviders();
   return true;
 }
 window.addEventListener("beforeunload", (e) => {
@@ -9307,9 +9308,11 @@ function drawEditor(p, presetID) {
       const priceRate = priceRateOfDraft();
       if (priceRate === undefined) return priceRateError(ed);
       if (priceTypedError(ed)) return;
+      const picked = accountModelsDraft(p);
+      if (picked === false) return editorError(t("Pick at least one model for the account, or choose All models"), "warn");
       const body = { id: p.id, models: chosenIds(), noModels: noneChosen(), unlisted: draft.unlisted, fallback: draft.fallback, contexts: cx.map, outputs: ox.map, compacts: cpx.map, proxy, accountProxies: own.map, maxConcurrency, ...queue, priceRate, modelPrefs: modelPrefsOfDraft(), pinUpstream: !!draft.pinUpstream, ...(p.carriesCompaction ? { nativeCompaction: !!draft.nativeCompaction } : {}), ...routingOfDraft(p) };
       saving(saveBtn, t("Saving…"));
-      savePluginOptions(subOf(a.agent)).then(() => providerAction("save", body, t("{name} saved", { name: p.name })), (e) => { doneSaving(saveBtn); editorError(e.message || String(e)); }); };
+      saveAccountModelsDraft(picked).then(() => savePluginOptions(subOf(a.agent))).then(() => providerAction("save", body, t("{name} saved", { name: p.name })), (e) => { doneSaving(saveBtn); editorError(e.message || String(e)); }); };
     bar.append(cancel, saveBtn);
     ed.append(bar);
     return ed;
@@ -9978,8 +9981,11 @@ function drawEditor(p, presetID) {
       Object.assign(body, movedURLs(draft));
     }
     editorError("");
+    const picked = accountModelsDraft(p);
+    if (picked === false) return editorError(t("Pick at least one model for the account, or choose All models"), "warn");
     saving(saveBtn, t(isNew ? "Adding…" : "Saving…"));
-    providerAction("save", body, t(isNew ? "{name} added" : "{name} saved", { name: draft.name || draft.id }));
+    const okMsg = t(isNew ? "{name} added" : "{name} saved", { name: draft.name || draft.id });
+    saveAccountModelsDraft(picked).then(() => providerAction("save", body, okMsg), (e) => { doneSaving(saveBtn); editorError(e.message || String(e)); });
   };
   saveBtn.onclick = save;
   bar.append(cancel, saveBtn);
@@ -11998,7 +12004,7 @@ function pluginMethod(sub, site) {
 // magpie, signs in and carries the requests.
 function pluginSubs() {
   return (providers.plugins || []).map((x) => ({
-    agent: x.id, pid: x.pid, name: x.name, icon: x.icon, plugin: x, own: true,
+    agent: x.id, pid: x.pid, name: x.name, icon: x.icon, plugin: x, own: true, single: !!x.single,
     get plans() { return t("from the plugin {spec}", { spec: x.spec }); },
   }));
 }
@@ -12175,7 +12181,8 @@ async function startPluginSignIn(sub, method, inputs = {}, o = {}) {
       return renderProviders();
     }
     if (ms[method].type === "api") {
-      signing = { agent: sub.agent, ...keep, state: "key" };
+      signing = { agent: sub.agent, ...keep, state: ms[method].keyless === true ? "starting" : "key" };
+      if (ms[method].keyless === true) return pluginKey(sub, "");
       return renderProviders();
     }
     const body = { provider: sub.pid, method, inputs };
@@ -12219,7 +12226,7 @@ async function pluginKey(sub, key) {
     const st = await api("plugin-signin", { provider: sub.pid, method: flow.method, inputs: flow.inputs, key });
     if (signing?.agent === sub.agent) signedIn(st);
   } catch (e) {
-    if (signing?.agent === sub.agent) { signing = { ...flow, error: e.message }; renderProviders(); }
+    if (signing?.agent === sub.agent) { signing = { ...flow, state: flow.state === "starting" ? "failed" : flow.state, error: e.message }; renderProviders(); }
   }
 }
 
@@ -13089,7 +13096,7 @@ function renderAccounts(a, p) {
     const add = el("button", "acc add");
     const ic = el("span", "dot");
     ic.append(svg(PLUS, 10, 1.8));
-    add.append(ic, el("span", "n", t(sub.single ? "Sign in to another {name} account" : "Add another {name} account", { name: sub.name })));
+    add.append(ic, el("span", "n", t(sub.single && sub.plugin ? "Sign in again" : sub.single ? "Sign in to another {name} account" : "Add another {name} account", { name: sub.name })));
     add.onclick = () => startSignIn(a.agent);
     list.append(add);
     if (sub.importable) {
@@ -14097,9 +14104,25 @@ async function accountAction(path, body, okMsg, confirmed = false) {
 // provider's, as before. The pill on its row says which it serves; a click
 // opens the provider's models under it as chips, picked and saved apart
 // from the editor's Save. acctModels is the row being picked: { id, ref,
-// chosen }.
+// chosen }. Picks left unsaved there go with the editor's Save, which says
+// it saved them (#2862).
 let acctModels = null;
 function accountModelsOf(p, ref) { return p.accountModels?.[String(ref).toLowerCase()] || []; }
+// accountModelsDraft: what the open picker of p's has picked and not saved,
+// as provider/accountmodels takes it; null when nothing, false when it has
+// every model unpicked, which no Save keeps.
+function accountModelsDraft(p) {
+  const a = acctModels;
+  if (!p || a?.id !== p.id) return null;
+  const own = accountModelsOf(p, a.ref);
+  if (own.length === a.chosen.length && a.chosen.every((id) => own.includes(id))) return null;
+  return a.chosen.length ? { id: p.id, account: a.ref, allow: [...a.chosen] } : false;
+}
+async function saveAccountModelsDraft(body) {
+  if (!body) return;
+  await api("provider/accountmodels", body);
+  acctModels = null;
+}
 // It gives the pill, and the open picker the row ends with, or null.
 function accountModels(p, ref, isKey, name) {
   const own = accountModelsOf(p, ref);

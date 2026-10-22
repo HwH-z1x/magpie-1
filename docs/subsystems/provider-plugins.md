@@ -228,3 +228,14 @@ Run the relevant package tests with an isolated home directory. Resolve GOPATH a
 ```
 
 Some migration and gateway plugin tests require Bun on PATH and use local plugin fixtures; they skip when Bun is unavailable. Report any skipped tests and verify the community package separately when its implementation changes.
+
+### Fixed-credential sign-in
+
+An `auth.methods` API method may declare magpie-only `keyless: true` when
+its `authorize` function supplies the credential. The host carries this
+boolean only for API methods with an authorize function. GUI and CLI skip
+personal-key entry for it; ordinary API methods still require a key.
+`auth.single: true` declares one provider identity: signing in again reuses
+its account slot and the account action says Sign in again. Existing records
+are not deleted. Other plugins keep multiple accounts. OpenCode ignores
+these optional fields; no provider id is special-cased in magpie.
