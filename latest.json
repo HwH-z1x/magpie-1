@@ -1,16 +1,16 @@
 {
-  "version": "1.0.8",
+  "version": "1.0.9",
   "channel": "request-intent",
-  "notes": "Upstream: [v0.1.1320](https://github.com/yetone/magpie-releases/releases/tag/v0.1.1320) (`46176fc14f3104a16d880d1dfd3646aa84688022`). Fork source: `1425c26d408a18e3bfd04555a6cd10b924b49473`.\n\nIncludes per-request intent classification within tool loops and fork-only restart updates. Experimental Windows x64 distribution; see the validation record. Full-suite, real-provider cross-model continuation and configuration rollback are not certified.\n\n<!-- lang:zh -->\n基于上游 [v0.1.1320](https://github.com/yetone/magpie-releases/releases/tag/v0.1.1320)，上游提交 `46176fc14f3104a16d880d1dfd3646aa84688022`，分支源码 `1425c26d408a18e3bfd04555a6cd10b924b49473`。\n\n保留同轮工具循环内每请求意图判断，并只从本分支下载重启更新。这是 Windows x64 实验发行版；完整套件、真实供应商跨模型续接和配置回滚尚未完成认证。请阅读[验证记录](https://github.com/HwH-z1x/magpie-1/blob/1425c26d408a18e3bfd04555a6cd10b924b49473/docs/custom-request-routing-validation.md)。",
-  "url": "https://github.com/HwH-z1x/magpie-1/releases/tag/request-v1.0.8",
+  "notes": "Upstream: [v0.1.1320](https://github.com/yetone/magpie-releases/releases/tag/v0.1.1320) (`46176fc14f3104a16d880d1dfd3646aa84688022`). Fork source: `2755e1f230fc97e225f28fcc23c37c53528c346f`.\n\nIncludes per-request intent classification within tool loops and fork-only restart updates. Experimental Windows x64 distribution; see the validation record. Full-suite, real-provider cross-model continuation and configuration rollback are not certified.\n\n<!-- lang:zh -->\n基于上游 [v0.1.1320](https://github.com/yetone/magpie-releases/releases/tag/v0.1.1320)，上游提交 `46176fc14f3104a16d880d1dfd3646aa84688022`，分支源码 `2755e1f230fc97e225f28fcc23c37c53528c346f`。\n\n保留同轮工具循环内每请求意图判断，并只从本分支下载重启更新。这是 Windows x64 实验发行版；完整套件、真实供应商跨模型续接和配置回滚尚未完成认证。请阅读[验证记录](https://github.com/HwH-z1x/magpie-1/blob/2755e1f230fc97e225f28fcc23c37c53528c346f/docs/custom-request-routing-validation.md)。",
+  "url": "https://github.com/HwH-z1x/magpie-1/releases/tag/request-v1.0.9",
   "upstreamVersion": "v0.1.1320",
   "upstreamCommit": "46176fc14f3104a16d880d1dfd3646aa84688022",
-  "sourceCommit": "1425c26d408a18e3bfd04555a6cd10b924b49473",
+  "sourceCommit": "2755e1f230fc97e225f28fcc23c37c53528c346f",
   "assets": {
     "magpie-windows-amd64.exe": {
-      "url": "https://github.com/HwH-z1x/magpie-1/releases/download/request-v1.0.8/magpie-windows-amd64.exe",
+      "url": "https://github.com/HwH-z1x/magpie-1/releases/download/request-v1.0.9/magpie-windows-amd64.exe",
       "size": 57367040,
-      "sha256": "3982d65a8909a37aea6332a46898120c7842a9f3bd77f190d973ab9ad7e629ce"
+      "sha256": "9cd2357ac5af772288fd616552f17c60573f08917116cf6128afe66e2545282d"
     }
   }
 }
