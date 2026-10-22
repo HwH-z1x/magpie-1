@@ -9,23 +9,33 @@ three.
 
 ## Custom fork update policy
 
-This fork's executable calls `update.ProtectCustomBuild` from `main` before
-starting any CLI or GUI path. The process-local policy in
-[`internal/update/custom.go`](../../internal/update/custom.go) is independent
-of the version label. The desktop updater starts in `custom` state, does
-not start its official feed loop, and refuses both staging and installation.
-`jsonIn` returns the custom guide instead of a downloaded release, so the
-Settings row offers a guide link and no restart-to-update action. The CLI
-also handles `update check` locally and refuses an official install.
+This fork's executable calls `update.ProtectCustomBuild` from `main`. The
+process-local policy in [`custom.go`](../../internal/update/custom.go) pins the
+feed to the fork's `request-update` branch and rejects official/environment-
+overridden update feeds. Only Windows x64 GUI builds with a `1.0.N` fork version
+and embedded source/upstream provenance enter the existing download/restart
+state machine; other builds retain the `custom` guide-only state.
 
-The package's staging/installing functions reject a protected process too,
-including administrator-assisted replacement. This keeps a stale in-memory
-staged update from being installed on quit or through a direct endpoint.
-Normal quit/relaunch is unaffected. External installers and a separate
-official process are outside this process's control; a dedicated portable
-directory and correct shortcuts remain necessary. Source maintenance uses
-[`build/update-custom.ps1`](../../build/update-custom.ps1); it is not run
-from the GUI. See the [custom build guide](../custom-request-routing.zh-CN.md).
+`LatestIn` reads the checksum-authoritative feed directly over HTTPS, never a
+source mirror. It validates the channel marker, provenance, exact repository,
+versioned release URL and sole supported asset before the GUI sees it. Binary
+downloads may use the existing mirror path but must match that trusted hash.
+`StageBinary` records the checksum in this process; every binary installation
+path, including elevation, rehashes the staged file against that record. A stale
+or foreign `.new` is not accepted. macOS bundle installation stays blocked.
+`jsonIn` also reports the current channel/upstream/source for the version row's
+tooltip. The CLI follows the same channel and developer-build restrictions.
+
+[`custom-release-pipeline.yml`](../../.github/workflows/custom-release-pipeline.yml)
+and [`release-custom.py`](../../build/release-custom.py) integrate stable source,
+run existing checks and publish experimental Windows x64 builds before atomically
+advancing the JSON feed. Code conflicts/check failures stop publication; only
+the fork's two README files have an explicit keep-fork merge policy. The
+[release-channel guide](../custom-release-channel.zh-CN.md) owns activation,
+versioning, supported platforms and recovery constraints. The existing restart,
+busy-gateway wait and binary-startup recovery are reused, not data migration
+rollback. External installers and separate official processes remain outside
+this process's protection.
 
 ## Responsibilities and sources of truth
 

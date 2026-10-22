@@ -4,3 +4,6 @@
 # checkout with autocrlf on gave them CRLF and four went red (#1827).
 # internal/agent/testdata/.gitattributes keeps its real CRLF bytes.
 * text=auto eol=lf
+# The automated integrator explicitly keeps this distribution's introductions.
+README.md merge=fork-readme
+README.zh-CN.md merge=fork-readme

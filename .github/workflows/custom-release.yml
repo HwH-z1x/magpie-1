@@ -1,0 +1,20 @@
+name: Request Intent Releases
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [custom/request-intent]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: request-intent-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'HwH-z1x/magpie-1'
+    uses: HwH-z1x/magpie-1/.github/workflows/custom-release-pipeline.yml@custom/request-intent

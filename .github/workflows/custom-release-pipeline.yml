@@ -1,0 +1,94 @@
+name: Build Request Intent Distribution
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    if: github.repository == 'HwH-z1x/magpie-1'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CGO_ENABLED: '0'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: custom/request-intent
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Integrate the latest upstream stable release
+        id: integrate
+        run: python build/release-custom.py prepare --state "$env:RUNNER_TEMP/request-intent-state.json"
+      - uses: actions/setup-go@v5
+        if: steps.integrate.outputs.build == 'true'
+        with:
+          go-version-file: go.mod
+      - name: Format and static checks
+        if: steps.integrate.outputs.build == 'true'
+        shell: pwsh
+        run: |
+          $bad = git ls-files '*.go' | ForEach-Object { gofmt -l $_ }
+          if ($bad) { throw "Unformatted Go files: $bad" }
+          go vet ./...
+          if ($LASTEXITCODE) { throw 'go vet failed' }
+      - name: Compile the existing suite and run updater checks
+        if: steps.integrate.outputs.build == 'true'
+        shell: pwsh
+        run: |
+          $env:HOME = Join-Path $env:RUNNER_TEMP 'isolated-home'
+          $env:USERPROFILE = $env:HOME
+          New-Item -ItemType Directory -Force $env:HOME | Out-Null
+          go test -run '^$' -timeout 10m ./...
+          if ($LASTEXITCODE) { throw 'Existing suite compilation failed' }
+          go test -count=1 -timeout 5m ./internal/update
+          if ($LASTEXITCODE) { throw 'Existing updater checks failed' }
+      - uses: actions/setup-node@v4
+        if: steps.integrate.outputs.build == 'true'
+        with:
+          node-version: '22'
+      - name: Run existing GUI updater checks
+        if: steps.integrate.outputs.build == 'true'
+        shell: pwsh
+        run: |
+          npm install --prefix "$env:RUNNER_TEMP/gui-checks" --no-package-lock playwright@1.62.1
+          if ($LASTEXITCODE) { throw 'Playwright installation failed' }
+          $env:NODE_PATH = "$env:RUNNER_TEMP/gui-checks/node_modules"
+          & "$env:RUNNER_TEMP/gui-checks/node_modules/.bin/playwright.cmd" install chromium webkit
+          if ($LASTEXITCODE) { throw 'Browser installation failed' }
+          node --test internal/gui/tests/i18n-keys.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/update-restart.test.cjs internal/gui/tests/update-hide.test.cjs
+          if ($LASTEXITCODE) { throw 'Existing GUI updater checks failed' }
+      - name: Build Windows x64 fork
+        if: steps.integrate.outputs.build == 'true'
+        shell: pwsh
+        env:
+          FORK_VERSION: ${{ steps.integrate.outputs.version }}
+          FORK_SOURCE: ${{ steps.integrate.outputs.source }}
+          UPSTREAM_VERSION: ${{ steps.integrate.outputs.upstream }}
+          UPSTREAM_SOURCE: ${{ steps.integrate.outputs.upstream_sha }}
+        run: |
+          go run github.com/tc-hib/go-winres@v0.3.3 make --in build/windows/winres.json --arch amd64 --out rsrc --file-version 0.0.0 --product-version 0.0.0
+          if ($LASTEXITCODE) { throw 'Resource generation failed' }
+          $flags = "-s -w -H windowsgui -X main.version=$env:FORK_VERSION -X github.com/yetone/magpie/internal/update.SourceCommit=$env:FORK_SOURCE -X github.com/yetone/magpie/internal/update.UpstreamVersion=$env:UPSTREAM_VERSION -X github.com/yetone/magpie/internal/update.UpstreamCommit=$env:UPSTREAM_SOURCE"
+          go build -tags production -trimpath -ldflags $flags -o dist/magpie-windows-amd64.exe .
+          if ($LASTEXITCODE) { throw 'Production build failed' }
+          python build/release-custom.py package --state "$env:RUNNER_TEMP/request-intent-state.json"
+          if ($LASTEXITCODE) { throw 'Packaging failed' }
+      - name: Publish fork assets, then atomically advance the update feed
+        if: steps.integrate.outputs.build == 'true'
+        run: python build/release-custom.py publish --state "$env:RUNNER_TEMP/request-intent-state.json"
+      - name: Keep diagnostics and candidate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: request-intent-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/
+            ${{ runner.temp }}/request-intent-state.json
+          if-no-files-found: ignore

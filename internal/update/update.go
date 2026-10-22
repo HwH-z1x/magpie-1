@@ -42,6 +42,9 @@ const Site = "https://usemagpie.ai"
 // Feed is where the newest release is described. MAGPIE_UPDATE_FEED points
 // it elsewhere, for testing an update against a local server.
 func Feed() string {
+	if CustomBuild() {
+		return customFeedRoot + "latest.json"
+	}
 	if f := os.Getenv("MAGPIE_UPDATE_FEED"); f != "" {
 		return f
 	}
@@ -50,10 +53,14 @@ func Feed() string {
 
 // Release is one published version.
 type Release struct {
-	Version string           `json:"version"` // "0.2.0", no v
-	Notes   string           `json:"notes"`   // markdown
-	URL     string           `json:"url"`     // the release page
-	Assets  map[string]Asset `json:"assets"`  // by file name
+	Channel         string           `json:"channel,omitempty"`
+	UpstreamVersion string           `json:"upstreamVersion,omitempty"`
+	UpstreamCommit  string           `json:"upstreamCommit,omitempty"`
+	SourceCommit    string           `json:"sourceCommit,omitempty"`
+	Version         string           `json:"version"` // "0.2.0", no v
+	Notes           string           `json:"notes"`   // markdown
+	URL             string           `json:"url"`     // the release page
+	Assets          map[string]Asset `json:"assets"`  // by file name
 }
 
 // Asset is one downloadable file of a release.
@@ -85,7 +92,13 @@ func LatestIn(ctx context.Context, lang string) (*Release, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := source.Do(client, req)
+	var res *http.Response
+	if CustomBuild() {
+		// The checksum authority must never fall back to a download mirror.
+		res, err = client.Do(req)
+	} else {
+		res, err = source.Do(client, req)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +112,9 @@ func LatestIn(ctx context.Context, lang string) (*Release, error) {
 	}
 	if parse(r.Version) == nil {
 		return nil, fmt.Errorf("update feed: no version")
+	}
+	if err := checkCustomRelease(&r); err != nil {
+		return nil, err
 	}
 	r.Notes = InLang(r.Notes, lang)
 	return &r, nil
@@ -391,8 +407,8 @@ func relaunchOpen(bundle string, window bool) string {
 // ReplaceBinary puts the release's build for this binary where the
 // running one is.
 func ReplaceBinary(ctx context.Context, rel *Release) error {
-	if CustomBuild() {
-		return ErrCustomUpdate
+	if err := checkCustomRelease(rel); err != nil {
+		return err
 	}
 	exe, err := Executable()
 	if err != nil {
@@ -412,8 +428,8 @@ func ReplaceBinary(ctx context.Context, rel *Release) error {
 // StageBinary downloads the release's build for this binary next to it (or
 // to the cache, where magpie may not write there), ready for InstallBinary.
 func StageBinary(ctx context.Context, rel *Release) (string, error) {
-	if CustomBuild() {
-		return "", ErrCustomUpdate
+	if err := checkCustomRelease(rel); err != nil {
+		return "", err
 	}
 	a, ok := rel.Assets[BinaryAsset()]
 	if !ok {
@@ -438,6 +454,7 @@ func StageBinary(ctx context.Context, rel *Release) (string, error) {
 		os.Remove(tmp)
 		return "", err
 	}
+	rememberCustomStage(tmp, a.SHA256)
 	return tmp, nil
 }
 
@@ -454,8 +471,8 @@ func InstallBinary(staged, exe string) error {
 // (Smart App Control, #894) isn't put in: a *BlockedError, and the
 // download removed.
 func InstallBinaryAside(staged, exe string) (string, error) {
-	if CustomBuild() {
-		return "", ErrCustomUpdate
+	if err := checkCustomStage(staged); err != nil {
+		return "", err
 	}
 	var old string
 	if runtime.GOOS == "windows" {
@@ -704,8 +721,8 @@ func fileHash(path string) string {
 
 // InstallBinaryAsAdmin is InstallBinary with the administrator's password.
 func InstallBinaryAsAdmin(staged, exe string) error {
-	if CustomBuild() {
-		return ErrCustomUpdate
+	if err := checkCustomStage(staged); err != nil {
+		return err
 	}
 	err := asAdmin("mv -f " + shellQuote(staged) + " " + shellQuote(exe))
 	if err != nil && !errors.Is(err, ErrCanceled) {

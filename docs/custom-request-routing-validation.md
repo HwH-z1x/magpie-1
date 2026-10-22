@@ -54,7 +54,7 @@ The updater retains a `remainingChecks` gate. Do not deploy a candidate
 until the required outstanding checks have been completed and recorded.
 It does not automatically advance or push the source maintenance branch.
 
-## Official-update protection follow-up
+## Historical official-update protection follow-up
 
 The fork now calls `update.ProtectCustomBuild` at executable startup. It
 blocks the official desktop download/install/restart path, installation on
@@ -78,3 +78,37 @@ For this follow-up, no test source was written or modified. Passed:
 The preceding failed/incomplete full-suite record remains applicable; this
 follow-up does not claim a green full suite or completed real-agent routing
 and deployment/rollback validation.
+
+## Fork release channel follow-up (2026-10-22)
+
+The previous blanket binary-update block is superseded for published Windows
+x64 GUI builds: they now use the fork-only channel. Developer builds and
+unsupported platforms keep the manual-guide state. Source and release metadata,
+exact fork URLs, trusted-feed checksums and a process-local staged-file recheck
+protect installation; no official-feed fallback is enabled. The publisher and
+workflow are production maintenance code, not new test code. No test source or
+fixtures were added or modified.
+
+Passed on the modified working tree:
+
+- Windows `go vet ./...`, existing `internal/update` suite (15.659s), and
+  production desktop build with Windows resources.
+- Compilation of every existing Go package/suite with `go test -run '^$'
+  -timeout 5m ./...` under an isolated HOME. This executes no test cases and is
+  not a full-suite pass.
+- Linux `go vet -tags nogui ./...` and nogui cross-build.
+- Existing updater GUI and translation files: 65/65 on Chromium/WebKit with
+  their existing language/width variants (97.8s).
+- Official actionlint v1.7.12 on both new workflows, Python publisher syntax,
+  Node syntax, Go formatting, diff checks and local Markdown links.
+
+The original full-suite failures/incomplete runs remain unresolved and are not
+relabeled passing. The release workflow deliberately publishes an experimental
+channel with the check scope and remaining work in each `build.json`, not a
+stable release certified under upstream's separate all-platform release rules.
+Not run locally: GitHub's end-to-end authenticated publication, a native desktop
+restart into a downloaded fork binary, configuration migration/rollback,
+gateway race checks or real-provider model switching. Remote workflow and first
+release status must be verified in Actions; committing the workflow alone does
+not activate a working update feed. The installed application and production
+account/configuration have not been changed.
