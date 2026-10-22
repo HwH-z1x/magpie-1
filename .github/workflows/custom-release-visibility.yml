@@ -1,0 +1,69 @@
+name: Show Current Fork Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/custom-release-visibility.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  show-current:
+    if: github.repository == 'HwH-z1x/magpie-1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify the published channel package and show it as Latest
+        shell: python
+        run: |
+          import base64
+          import hashlib
+          import json
+          from pathlib import Path
+          import re
+          import subprocess
+          import tempfile
+
+          repo = "HwH-z1x/magpie-1"
+          def api(path):
+              return json.loads(subprocess.check_output(["gh", "api", path], text=True))
+          def channel():
+              item = api(f"repos/{repo}/contents/latest.json?ref=request-update")
+              return json.loads(base64.b64decode(item["content"]))
+
+          manifest = channel()
+          version = manifest["version"]
+          if manifest.get("channel") != "request-intent" or not re.fullmatch(r"1\.0\.[1-9][0-9]*", version):
+              raise RuntimeError("Unexpected fork update channel")
+          tag = f"request-v{version}"
+          release = api(f"repos/{repo}/releases/tags/{tag}")
+          assets = {asset["name"]: asset for asset in release["assets"]}
+          expected = {"magpie-windows-amd64.exe", "build.json", "latest.json", "SHA256SUMS"}
+          if release["draft"] or not expected.issubset(assets):
+              raise RuntimeError("Channel release is not public or has missing assets")
+          exe = "magpie-windows-amd64.exe"
+          package = manifest["assets"][exe]
+          url = f"https://github.com/{repo}/releases/download/{tag}/{exe}"
+          if package["url"] != url or assets[exe]["browser_download_url"] != url:
+              raise RuntimeError("Unexpected package location")
+          with tempfile.TemporaryDirectory() as directory:
+              subprocess.run(["gh", "release", "download", tag, "-R", repo,
+                              "--pattern", exe, "--dir", directory], check=True)
+              binary = Path(directory) / exe
+              with binary.open("rb") as handle:
+                  digest = hashlib.file_digest(handle, "sha256").hexdigest()
+              if binary.stat().st_size != package["size"] or digest != package["sha256"]:
+                  raise RuntimeError("Published package does not match the update channel")
+          if channel() != manifest:
+              raise RuntimeError("Update channel advanced; run this workflow again")
+          subprocess.run(["gh", "release", "edit", tag, "-R", repo,
+                          "--prerelease=false", "--latest=true",
+                          "--title", f"Magpie 每请求意图路由 {version}"], check=True)
+          latest = api(f"repos/{repo}/releases/latest")
+          if latest["tag_name"] != tag or latest["prerelease"]:
+              raise RuntimeError("Release visibility did not update")
+          print(f"Latest: {latest['html_url']}")

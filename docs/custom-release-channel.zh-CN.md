@@ -6,6 +6,8 @@
 
 Windows x64 发行版已在 [分支 Releases](https://github.com/HwH-z1x/magpie-1/releases?q=request-v&expanded=true) 持续发布，构建记录可在 [Actions](https://github.com/HwH-z1x/magpie-1/actions/workflows/custom-release.yml) 查看。请勿用官方原版安装包替代分支发行包。
 
+最新通过发布检查的安装包会标记为 GitHub 的 Latest，显示在仓库首页。这个标记用于提供下载入口，验证范围仍以发行说明和 `build.json` 为准。早期版本曾标为 Pre-release，因此首页没有 Latest；维护者可手动运行 `Show Current Fork Release`，校验当前更新渠道中的安装包后恢复首页入口。
+
 ## 用户操作
 
 1. 从带 `request-v` 前缀的分支 Release 下载 `magpie-windows-amd64.exe`，核对同页 `SHA256SUMS`，先退出原版并备份数据。

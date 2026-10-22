@@ -162,7 +162,7 @@ def publish(state, directory):
         raise RuntimeError("Maintenance branch or update channel advanced; start a new run")
     run("git", "push", "origin", f"HEAD:refs/heads/{BRANCH}", capture=False)
     run("gh", "release", "create", info["tag"], "-R", REPO, "--target", info["sourceCommit"],
-        "--draft", "--prerelease", "--title", f'Magpie Request Intent {info["version"]}',
+        "--draft", "--title", f'Magpie 每请求意图路由 {info["version"]}',
         "--notes-file", str(directory / "release-notes.md"), capture=False)
     assets = [EXE, "latest.json", "build.json", "SHA256SUMS"]
     run("gh", "release", "upload", info["tag"], "-R", REPO,
@@ -175,7 +175,8 @@ def publish(state, directory):
             digest = hashlib.file_digest(handle, "sha256").hexdigest()
         if digest != manifest["assets"][EXE]["sha256"]:
             raise RuntimeError("Uploaded executable checksum mismatch; feed not changed")
-    run("gh", "release", "edit", info["tag"], "-R", REPO, "--draft=false", "--latest=false", capture=False)
+    run("gh", "release", "edit", info["tag"], "-R", REPO,
+        "--draft=false", "--prerelease=false", "--latest=true", capture=False)
     previous = channel_file("notes.json", info["channelHead"])
     notes = previous["releases"] if previous else []
     notes = [dict(version=info["version"], notes=manifest["notes"], url=manifest["url"])] + notes
