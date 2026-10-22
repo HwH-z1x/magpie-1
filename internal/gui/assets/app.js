@@ -4113,7 +4113,7 @@ async function renderUpdateBadge() {
   // click, not as "now"
   if (u.state === "ready" && u.waiting) {
     label.textContent = t("Waiting to update");
-    b.title = t("magpie restarts to update to {v} once the agents' requests through the gateway have finished: {busy}. Click to restart now.", { v: u.latest, busy: updateBusyText(u.busy) || "…" });
+    b.title = t("magpie restarts to update to {v} once the agents' requests through the gateway have finished: {busy}. Click to restart now.", { v: u.latestDisplay || u.latest, busy: updateBusyText(u.busy) || "…" });
     b.onclick = () => {
       if (Date.now() - (+b.dataset.armed || 0) < 1500) return;
       b.classList.add("busy");
@@ -4132,11 +4132,11 @@ async function renderUpdateBadge() {
   }
   // a swap that failed says so where it was clicked, not only in the tooltip
   label.textContent = u.state === "ready" && u.error ? t("Update failed") : t("Update");
-  b.title = u.state === "ready" ? t("Restart to update to {v}", { v: u.latest })
-    : u.state === "error" ? t("Couldn't download {v}", { v: u.latest }) + " · " + t("Click to try again")
-    : u.state === "found" ? t("{v} is out", { v: u.latest }) + (u.size ? " · " + t("{done} MB", { done: (u.size / 1e6).toFixed(1) }) : "") + " · " + t("Click to download and restart")
+  b.title = u.state === "ready" ? t("Restart to update to {v}", { v: u.latestDisplay || u.latest })
+    : u.state === "error" ? t("Couldn't download {v}", { v: u.latestDisplay || u.latest }) + " · " + t("Click to try again")
+    : u.state === "found" ? t("{v} is out", { v: u.latestDisplay || u.latest }) + (u.size ? " · " + t("{done} MB", { done: (u.size / 1e6).toFixed(1) }) : "") + " · " + t("Click to download and restart")
     : u.stuck ? updateStuck(u) + " " + t("Click to open the download page.")
-    : t("{v} is out", { v: u.latest });
+    : t("{v} is out", { v: u.latestDisplay || u.latest });
   if (u.error) b.title += "\n" + u.error;
   b.onclick = () => {
     // what changed is shown first, and a click there restarts (#844); one
@@ -4268,11 +4268,11 @@ async function openWhatsNew(u, b) {
   if (b) { b.disabled = false; b.classList.remove("busy"); }
   const list = [...(w?.releases || [])];
   if (u?.notes && u.latest && ["ready", "available", "downloading", "found"].includes(u.state) && !list.some((r) => r.version === u.latest)) {
-    list.unshift({ version: u.latest, notes: u.notes, url: u.url, pending: true });
+    list.unshift({ version: u.latest, displayVersion: u.latestDisplay, notes: u.notes, url: u.url, pending: true });
   }
   const failed = !w || !!w.error;
   if (!list.length && !w?.current) return status(t("Couldn't load the release notes"), "err");
-  showWhatsNew(list, false, { failed, current: w?.current, url: w?.url, retry: () => openWhatsNew(u) });
+  showWhatsNew(list, false, { failed, current: w?.currentDisplay || w?.current, url: w?.url, retry: () => openWhatsNew(u) });
 }
 
 // auto: shown by itself after an update, with "Don't show again today"
@@ -4283,12 +4283,12 @@ async function openWhatsNew(u, b) {
 function showWhatsNew(releases, auto, more = {}) {
   const ed = el("div", "editor whatsnew");
   const head = el("div", "ehead");
-  head.append(el("b", "", t("What's new in {v}", { v: "v" + (releases[0]?.version || more.current) })));
+  head.append(el("b", "", t("What's new in {v}", { v: "v" + (releases[0]?.displayVersion || releases[0]?.version || more.current) })));
   ed.append(head);
   for (const r of releases) {
     const sec = el("section", "wn-rel");
     const h = el("div", "wn-ver");
-    h.append(el("b", "", "v" + r.version));
+    h.append(el("b", "", "v" + (r.displayVersion || r.version)));
     if (r.pending) h.append(el("span", "badge", t("Not installed yet")));
     sec.append(h, noteBlocks(r.notes));
     ed.append(sec);
@@ -4396,16 +4396,16 @@ async function confirmUpdate(u, go) {
   if (mode === "panel" || !$("#modal").hidden) return go();
   const ed = el("div", "editor whatsnew update-ask");
   const head = el("div", "ehead");
-  const title = el("b", "", t("Update to {v}", { v: "v" + u.latest }));
+  const title = el("b", "", t("Update to {v}", { v: "v" + (u.latestDisplay || u.latest) }));
   head.append(title);
-  if (u.current) head.append(el("span", "wn-since", t("What changed since {v}", { v: "v" + u.current })));
+  if (u.current) head.append(el("span", "wn-since", t("What changed since {v}", { v: "v" + (u.currentDisplay || u.current) })));
   const box = el("div", "wn-list");
   const draw = (releases) => {
     box.replaceChildren();
     for (const r of releases) {
       const sec = el("section", "wn-rel");
       const h = el("div", "wn-ver");
-      h.append(el("b", "", "v" + r.version));
+      h.append(el("b", "", "v" + (r.displayVersion || r.version)));
       sec.append(h, noteBlocks(r.notes));
       box.append(sec);
     }
@@ -4416,7 +4416,7 @@ async function confirmUpdate(u, go) {
       box.append(sec);
     }
   };
-  draw(u.notes ? [{ version: u.latest, notes: u.notes }] : []);
+  draw(u.notes ? [{ version: u.latest, displayVersion: u.latestDisplay, notes: u.notes }] : []);
   const bar = el("div", "bar");
   const later = el("button", "text", t("Later"));
   later.onclick = (e) => { e.stopPropagation(); closeConfirmAsk(); };
@@ -4432,7 +4432,7 @@ async function confirmUpdate(u, go) {
   // since the one downloaded (#910), which the restart then waits for
   const w = await api(updatePath("update/notes")).catch(() => null);
   if (confirmAsk !== ed) return;
-  if (w?.latest && w.latest !== u.latest) title.textContent = t("Update to {v}", { v: "v" + w.latest });
+  if (w?.latest && w.latest !== u.latest) title.textContent = t("Update to {v}", { v: "v" + (w.latestDisplay || w.latest) });
   if (w?.releases?.length) draw(w.releases);
 }
 
@@ -19524,7 +19524,7 @@ function renderSettings() {
     about.append(r);
     return r;
   };
-  renderUpdate(row(t("Version"), "", s.version));
+  renderUpdate(row(t("Version"), "", s.versionDisplay || s.version));
   // what changed in this version, and in one waiting; a build from source
   // has no notes
   if (/^v?\d+\.\d+\.\d+$/.test(s.version || "")) {
@@ -19540,7 +19540,7 @@ function renderSettings() {
   if (s.updateSkip && !s.noUpdatePill) {
     api(updatePath("update")).then((u) => {
       if (!pill.isConnected || !u || u.latest !== s.updateSkip) return;
-      pill.querySelector(".sub").textContent = t("Hidden for {v} until a newer version is out", { v: u.latest });
+      pill.querySelector(".sub").textContent = t("Hidden for {v} until a newer version is out", { v: u.latestDisplay || u.latest });
       const back = el("button", "text", t("Show again"));
       back.onclick = () => skipUpdate("");
       pill.querySelector(".val").prepend(back);
@@ -23358,7 +23358,7 @@ async function renderUpdate(r, u) {
       if (u.url) btn(t("Custom build update guide"), () => (web ? window.open(u.url, "_blank", "noopener") : api("open", { url: u.url })));
       break;
     case "ready": {
-      sub.textContent = t("{v} is downloaded", { v: u.latest }) + (u.error ? " · " + u.error : "");
+      sub.textContent = t("{v} is downloaded", { v: u.latestDisplay || u.latest }) + (u.error ? " · " + u.error : "");
       // a failed install says why in full, and offers the release page to
       // put the new version in by hand
       sub.title = u.error || "";
@@ -23401,7 +23401,7 @@ async function renderUpdate(r, u) {
     case "found": {
       // downloads wait for a click (Settings' Download updates
       // automatically off, #2296): what is out, and how big it is
-      sub.textContent = t("{v} is out", { v: u.latest }) + (u.size ? " · " + t("{done} MB", { done: (u.size / 1e6).toFixed(1) }) : "");
+      sub.textContent = t("{v} is out", { v: u.latestDisplay || u.latest }) + (u.size ? " · " + t("{done} MB", { done: (u.size / 1e6).toFixed(1) }) : "");
       const get = btn(t("Download update"), async () => {
         if (updateBusy) return;
         get.disabled = true;
@@ -23414,13 +23414,13 @@ async function renderUpdate(r, u) {
       break;
     }
     case "available":
-      sub.textContent = t("{v} is out", { v: u.latest });
+      sub.textContent = t("{v} is out", { v: u.latestDisplay || u.latest });
       if (u.stuck) sub.textContent += " · " + updateStuck(u);
       btn(t("Download"), () => (web && u.url ? window.open(u.url, "_blank", "noopener") : api("update/install", {})));
       if (!web) page();
       break;
     case "downloading":
-      sub.textContent = t("Downloading {v}…", { v: u.latest });
+      sub.textContent = t("Downloading {v}…", { v: u.latestDisplay || u.latest });
       if (u.total) sub.textContent += " " + Math.floor((u.done / u.total) * 100) + "% · " + t("{done} of {total} MB", { done: (u.done / 1e6).toFixed(1), total: (u.total / 1e6).toFixed(1) });
       else if (u.done) sub.textContent += " " + t("{done} MB", { done: (u.done / 1e6).toFixed(1) });
       page();
@@ -23437,14 +23437,14 @@ async function renderUpdate(r, u) {
       break;
     case "error":
       // the reason in sight: "timed out" says try a proxy, a 404 says wait
-      sub.textContent = t(u.latest ? "Couldn't download {v}" : "Couldn't check for updates", { v: u.latest }) + (u.error ? " · " + u.error.replace(/^Get "[^"]*": /, "") : "");
+      sub.textContent = t(u.latest ? "Couldn't download {v}" : "Couldn't check for updates", { v: u.latestDisplay || u.latest }) + (u.error ? " · " + u.error.replace(/^Get "[^"]*": /, "") : "");
       sub.title = u.error || "";
       if (u.error) sub.classList.add("wraps");
       // through a mirror (#893): it's the mirror's failing — it didn't
       // answer, or sent a file that isn't the release's, never installed —
       // and GitHub itself is offered, which also takes the mirror away
       if (u.mirror) {
-        sub.textContent = t("Couldn't download {v} through the mirror {mirror}; it may be down or sent a file that doesn't match the release, which isn't installed", { v: u.latest, mirror: u.mirror })
+        sub.textContent = t("Couldn't download {v} through the mirror {mirror}; it may be down or sent a file that doesn't match the release, which isn't installed", { v: u.latestDisplay || u.latest, mirror: u.mirror })
           + (u.error ? " · " + u.error.replace("through the mirror " + u.mirror + ": ", "").replace(/^Get "[^"]*": /, "") : "");
         btn(t("Download from GitHub"), async () => {
           if (updateBusy) return;
@@ -23468,8 +23468,8 @@ async function renderUpdate(r, u) {
       // it again; Check tries it once more.
       const b = u.blocked || {};
       sub.textContent = b.policy
-        ? t("{v} didn't start on this computer: Windows' Smart App Control (or another app control policy) blocked the new version, which isn't signed. magpie stays on {cur}. Download it and run it yourself, or turn Smart App Control off and check again", { v: u.latest || b.version, cur: u.current })
-        : t("{v} didn't start on this computer, so magpie stays on {cur}", { v: u.latest || b.version, cur: u.current }) + (b.error ? " · " + b.error : "");
+        ? t("{v} didn't start on this computer: Windows' Smart App Control (or another app control policy) blocked the new version, which isn't signed. magpie stays on {cur}. Download it and run it yourself, or turn Smart App Control off and check again", { v: u.latestDisplay || u.latest || b.version, cur: u.currentDisplay || u.current })
+        : t("{v} didn't start on this computer, so magpie stays on {cur}", { v: u.latestDisplay || u.latest || b.version, cur: u.currentDisplay || u.current }) + (b.error ? " · " + b.error : "");
       sub.title = b.error || u.error || "";
       sub.classList.add("wraps");
       if (u.url) btn(t("Download"), () => (web ? window.open(u.url, "_blank", "noopener") : api("open", { url: u.url })));

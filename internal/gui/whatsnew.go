@@ -133,9 +133,10 @@ func usedBefore(dir string) bool {
 }
 
 type whatsNewJSON struct {
-	Show     bool          `json:"show"`
-	Current  string        `json:"current"`
-	Releases []update.Note `json:"releases"`
+	Show           bool          `json:"show"`
+	Current        string        `json:"current"`
+	CurrentDisplay string        `json:"currentDisplay,omitempty"`
+	Releases       []update.Note `json:"releases"`
 	// Error: the notes couldn't be had (the site down, or GitHub failing
 	// it), as opposed to releases that have none (#661); URL is the
 	// current version's release page, where they can be read instead
@@ -158,6 +159,9 @@ func (n *whatsNew) get(ctx context.Context, all bool, lang string) whatsNewJSON 
 	popup := pending && !shown && !n.quiet && !quietToday()
 	n.mu.Unlock()
 	j := whatsNewJSON{Current: Version, Releases: []update.Note{}}
+	if update.CustomBuild() {
+		j.CurrentDisplay = update.DisplayVersion(Version)
+	}
 	if (!popup && !all) || !update.Released(Version) {
 		return j
 	}
@@ -209,7 +213,11 @@ func fetchNotes(ctx context.Context, after, upto, lang string) ([]update.Note, e
 	if err != nil {
 		return nil, failed
 	}
-	notes = update.Between([]update.Note{{Version: rel.Version, Notes: rel.Notes, URL: rel.URL}}, after, upto)
+	note := update.Note{Version: rel.Version, Notes: rel.Notes, URL: rel.URL}
+	if update.CustomBuild() {
+		note.DisplayVersion = rel.DisplayVersion()
+	}
+	notes = update.Between([]update.Note{note}, after, upto)
 	if len(notes) == 0 {
 		return nil, failed
 	}

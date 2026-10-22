@@ -140,13 +140,15 @@ def package(state, directory):
     url = f'{ROOT}/releases/tag/{info["tag"]}'
     notes = (
         f'Upstream: [{info["upstreamVersion"]}]({info["upstreamURL"]}) '
-        f'(`{info["upstreamCommit"]}`). Fork source: `{info["sourceCommit"]}`.\n\n'
+        f'(`{info["upstreamCommit"]}`). Fork build: `{info["version"]}`. '
+        f'Fork source: `{info["sourceCommit"]}`.\n\n'
         'Includes per-request intent classification within tool loops and fork-only restart updates. '
         'Experimental Windows x64 distribution; see the validation record. '
         'Full-suite, real-provider cross-model continuation and configuration rollback are not certified.\n\n'
         '<!-- lang:zh -->\n'
         f'基于上游 [{info["upstreamVersion"]}]({info["upstreamURL"]})，'
-        f'上游提交 `{info["upstreamCommit"]}`，分支源码 `{info["sourceCommit"]}`。\n\n'
+        f'上游提交 `{info["upstreamCommit"]}`，内部构建编号 `{info["version"]}`，'
+        f'分支源码 `{info["sourceCommit"]}`。\n\n'
         '保留同轮工具循环内每请求意图判断，并只从本分支下载重启更新。'
         '这是 Windows x64 实验发行版；完整套件、真实供应商跨模型续接和配置回滚尚未完成认证。'
         f'请阅读[验证记录]({ROOT}/blob/{info["sourceCommit"]}/docs/custom-request-routing-validation.md)。'
@@ -184,7 +186,7 @@ def publish(state, directory):
             return
         raise
     run("gh", "release", "create", info["tag"], "-R", REPO, "--target", info["sourceCommit"],
-        "--draft", "--title", f'Magpie 每请求意图路由 {info["version"]}',
+        "--draft", "--title", f'Magpie 每请求意图路由 {info["upstreamVersion"]}（构建 {info["version"]}）',
         "--notes-file", str(directory / "release-notes.md"), capture=False)
     assets = [EXE, "latest.json", "build.json", "SHA256SUMS"]
     run("gh", "release", "upload", info["tag"], "-R", REPO,
@@ -205,7 +207,8 @@ def publish(state, directory):
         "--draft=false", "--prerelease=false", "--latest=true", capture=False)
     previous = channel_file("notes.json", info["channelHead"])
     notes = previous["releases"] if previous else []
-    notes = [dict(version=info["version"], notes=manifest["notes"], url=manifest["url"])] + notes
+    notes = [dict(version=info["version"], displayVersion=info["upstreamVersion"].removeprefix("v"),
+                  notes=manifest["notes"], url=manifest["url"])] + notes
     documents = {"latest.json": manifest, "notes.json": {"releases": notes[:40]}}
     elements = []
     for name, content in documents.items():

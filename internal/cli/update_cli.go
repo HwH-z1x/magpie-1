@@ -154,7 +154,7 @@ func updateCmd(args []string) error {
 	}
 	if update.CustomBuild() && !update.CustomUpdates(version) {
 		if len(args) == 2 && args[1] == "check" {
-			fmt.Println("magpie", version, "is a protected custom build; update its source and rebuild:", update.CustomUpdateGuide)
+			fmt.Println("magpie", update.DisplayVersion(version), "is a protected custom build; update its source and rebuild:", update.CustomUpdateGuide)
 			return nil
 		}
 		return update.ErrCustomUpdate
@@ -168,13 +168,13 @@ func updateCmd(args []string) error {
 	}
 	if !update.Newer(rel.Version, version) {
 		if update.Released(version) {
-			fmt.Println(green.Render("✓"), "magpie", version, muted.Render("is the latest"))
+			fmt.Println(green.Render("✓"), "magpie", update.DisplayVersion(version), muted.Render("is the latest"))
 		} else {
-			fmt.Println("magpie", version, muted.Render("was built from source; the latest release is "+rel.Version))
+			fmt.Println("magpie", update.DisplayVersion(version), muted.Render("was built from source; the latest release is "+rel.DisplayVersion()))
 		}
 		return nil
 	}
-	fmt.Println("magpie", bold.Render(rel.Version), "is out", muted.Render("(you have "+version+") · "+rel.URL))
+	fmt.Println("magpie", bold.Render(rel.DisplayVersion()), "is out", muted.Render("(you have "+update.DisplayVersion(version)+") · "+rel.URL))
 	if len(args) > 1 && args[1] == "check" {
 		return nil
 	}

@@ -31,7 +31,7 @@ $env:CGO_ENABLED = '0'
 ..\.toolchain\go\bin\go.exe build -tags production -trimpath -ldflags '-s -w -H windowsgui -X main.version=custom-request-intent-dev' -o dist/magpie-custom.exe .
 ```
 
-手动开发构建使用 `custom-<sha>` 版本号并显示手动维护提示。GitHub 发行构建使用独立递增的 `1.0.N` 版本号，同时嵌入上游版本号与源码提交；只有具备完整发行元数据的受支持平台才会启用分支在线更新。程序入口始终启用分支保护，拒绝切回官方更新源。运行前请先退出占用默认 3425 端口的官方版。
+手动开发构建使用 `custom-<sha>` 版本号并显示手动维护提示。GitHub 发行构建显示对应的上游版本号，同时保留独立递增的内部构建编号 `1.0.N` 和源码提交；只有具备完整发行元数据的受支持平台才会启用分支在线更新。程序入口始终启用分支保护，拒绝切回官方更新源。运行前请先退出占用默认 3425 端口的官方版。
 
 首次使用建议将 exe 放入专属目录，并在同目录新建 `.portable` 文件，使配置保存在同级的 `data` 目录中。便携模式会建立独立配置，不会自动读取官方版账号；如需迁移，请先退出官方版并备份其数据目录，再通过 Magpie 的备份与恢复功能导入。
 

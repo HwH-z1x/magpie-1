@@ -14,7 +14,13 @@ process-local policy in [`custom.go`](../../internal/update/custom.go) pins the
 feed to the fork's `request-update` branch and rejects official/environment-
 overridden update feeds. Only Windows x64 GUI builds with a `1.0.N` fork version
 and embedded source/upstream provenance enter the existing download/restart
-state machine; other builds retain the `custom` guide-only state.
+state machine; other builds retain the `custom` guide-only state. The published
+upstream version is the presentation label in Settings, the tray, CLI output,
+update prompts and new release notes. Raw `version`, `current` and `latest`
+remain fork build identities for comparisons, dismissal and restart state;
+additive display fields carry labels without changing those contracts.
+Windows product/file versions and release titles follow the integrated
+upstream version on each publication.
 
 `LatestIn` reads the checksum-authoritative feed directly over HTTPS, never a
 source mirror. It validates the channel marker, provenance, exact repository,

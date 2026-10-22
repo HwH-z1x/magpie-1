@@ -28,6 +28,22 @@ var commitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // monotonically increasing fork version. The release workflow sets them.
 var UpstreamVersion, UpstreamCommit, SourceCommit string
 
+// DisplayVersion keeps the upstream version visible while the fork's build
+// sequence remains the identity used by older clients and update state.
+func DisplayVersion(version string) string {
+	if CustomBuild() && customVersion.MatchString(version) && Released(UpstreamVersion) {
+		return strings.TrimPrefix(UpstreamVersion, "v")
+	}
+	return version
+}
+
+func (r *Release) DisplayVersion() string {
+	if CustomBuild() && r.Channel == customChannel && Released(r.UpstreamVersion) {
+		return strings.TrimPrefix(r.UpstreamVersion, "v")
+	}
+	return r.Version
+}
+
 // ProtectCustomBuild is called by this fork's executable before starting
 // the CLI or GUI. The protection is independent of its version label.
 func ProtectCustomBuild() { customBuild.Store(true) }

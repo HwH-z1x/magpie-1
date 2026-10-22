@@ -345,9 +345,10 @@ func currentFX() fxJSON {
 // settingsJSON is the Settings page: the two choices plus the facts it shows.
 type settingsJSON struct {
 	settings.Settings
-	Version string `json:"version"`
-	Dir     string `json:"dir"`     // where magpie keeps its files, as shown
-	Gateway string `json:"gateway"` // the local endpoint
+	Version        string `json:"version"`
+	VersionDisplay string `json:"versionDisplay,omitempty"`
+	Dir            string `json:"dir"`     // where magpie keeps its files, as shown
+	Gateway        string `json:"gateway"` // the local endpoint
 	// Builtins are the built-in plugins: each one's switch, whether it
 	// runs and what of it is in use (builtins.go)
 	Builtins []builtinJSON `json:"builtins"`
@@ -592,6 +593,9 @@ var loginState = autostart.Enabled
 
 func settingsState() settingsJSON {
 	s := settingsJSON{Settings: settings.Load(), Version: Version, Dir: tilde(settings.Dir()), Portable: settings.Portable() != "", Gateway: gateway.URL()}
+	if update.CustomBuild() {
+		s.VersionDisplay = update.DisplayVersion(Version)
+	}
 	s.AddrEnv = os.Getenv("MAGPIE_ADDR")
 	s.Builtins = builtinsState()
 	s.JSRoutings = middleware.Routings()

@@ -80,10 +80,12 @@ type updater struct {
 type updateJSON struct {
 	State           string `json:"state"`
 	Current         string `json:"current"`
+	CurrentDisplay  string `json:"currentDisplay,omitempty"`
 	Channel         string `json:"channel,omitempty"`
 	UpstreamVersion string `json:"upstreamVersion,omitempty"`
 	SourceCommit    string `json:"sourceCommit,omitempty"`
 	Latest          string `json:"latest,omitempty"`
+	LatestDisplay   string `json:"latestDisplay,omitempty"`
 	Notes           string `json:"notes,omitempty"`
 	URL             string `json:"url,omitempty"`
 	Stuck           string `json:"stuck,omitempty"` // available: why it can't update itself
@@ -347,7 +349,7 @@ func (u *updater) run() {
 		// another magpie put the update in already: a restart is all
 		u.state = "ready"
 		if u.onReady != nil {
-			go u.onReady(rel.Version)
+			go u.onReady(rel.DisplayVersion())
 		}
 		return
 	case hold:
@@ -379,7 +381,7 @@ func (u *updater) run() {
 	}
 	u.state, u.staged = "ready", staged
 	if u.onReady != nil {
-		go u.onReady(rel.Version)
+		go u.onReady(rel.DisplayVersion())
 	}
 }
 
@@ -483,6 +485,7 @@ func (u *updater) jsonIn(lang string) updateJSON {
 	j := updateJSON{State: u.state, Current: Version, Error: u.err, Retry: u.retry}
 	if update.CustomBuild() {
 		j.Channel, j.UpstreamVersion, j.SourceCommit = "request-intent", update.UpstreamVersion, update.SourceCommit
+		j.CurrentDisplay = update.DisplayVersion(Version)
 	}
 	if u.state == "error" {
 		j.Mirror = u.mirror
@@ -514,6 +517,9 @@ func (u *updater) jsonIn(lang string) updateJSON {
 	if u.latest != nil {
 		// the notes without their download links: magpie downloads it itself
 		j.Latest, j.Notes, j.URL = u.latest.Version, update.StripInstall(u.latest.Notes), u.latest.URL
+		if update.CustomBuild() {
+			j.LatestDisplay = u.latest.DisplayVersion()
+		}
 	}
 	return j
 }
@@ -565,14 +571,15 @@ func updateRoutes(mux *http.ServeMux, w Windows) {
 		updates.freshen()
 		j := updates.jsonIn(askedLang(r))
 		out := struct {
-			Latest   string        `json:"latest,omitempty"`
-			Releases []update.Note `json:"releases"`
-			Error    string        `json:"error,omitempty"`
-		}{Latest: j.Latest, Releases: []update.Note{}}
+			Latest        string        `json:"latest,omitempty"`
+			LatestDisplay string        `json:"latestDisplay,omitempty"`
+			Releases      []update.Note `json:"releases"`
+			Error         string        `json:"error,omitempty"`
+		}{Latest: j.Latest, LatestDisplay: j.LatestDisplay, Releases: []update.Note{}}
 		if j.Latest != "" {
 			notes, err := fetchNotes(r.Context(), Version, j.Latest, pageLang(r))
 			if len(notes) == 0 && strings.TrimSpace(j.Notes) != "" {
-				notes = []update.Note{{Version: j.Latest, Notes: j.Notes, URL: j.URL}}
+				notes = []update.Note{{Version: j.Latest, DisplayVersion: j.LatestDisplay, Notes: j.Notes, URL: j.URL}}
 			}
 			if len(notes) > 0 {
 				out.Releases = notes

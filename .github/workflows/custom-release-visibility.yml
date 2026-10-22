@@ -62,7 +62,7 @@ jobs:
               raise RuntimeError("Update channel advanced; run this workflow again")
           subprocess.run(["gh", "release", "edit", tag, "-R", repo,
                           "--prerelease=false", "--latest=true",
-                          "--title", f"Magpie 每请求意图路由 {version}"], check=True)
+                          "--title", f"Magpie 每请求意图路由 {manifest['upstreamVersion']}（构建 {version}）"], check=True)
           latest = api(f"repos/{repo}/releases/latest")
           if latest["tag_name"] != tag or latest["prerelease"]:
               raise RuntimeError("Release visibility did not update")

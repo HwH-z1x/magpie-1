@@ -13,7 +13,7 @@ Windows x64 发行版已在 [分支 Releases](https://github.com/HwH-z1x/magpie-
 1. 从带 `request-v` 前缀的分支 Release 下载 `magpie-windows-amd64.exe`，核对同页 `SHA256SUMS`，先退出原版并备份数据。
 2. 将 exe 放到专属目录（可改名为 `magpie-custom.exe`）。如需隔离配置，在同目录新建 `.portable` 文件；便携模式不会自动迁移原有账号。
 3. 首次从原版或本地开发版切换时需手动替换一次。之后直接在软件内点击“检查 / 下载 / 重启更新”即可，本机无需安装 Git 或 Go。
-4. 设置页版本行的悬停提示与 Release 说明都会标注分支渠道、对应的上游版本号和源码提交。分支版本号 `1.0.N` 独立递增，不等同于上游版本号。
+4. 软件设置页、托盘、命令行和 Release 标题显示对应的上游版本号，Windows 文件属性中的产品版本也与之对齐。每次自动更新都从当次合入的上游正式版读取，无需手动改号。`1.0.N` 仅作为内部构建编号，用于区分同一上游版本下的多次分支修复，并保留旧版一键更新的兼容性；发行标签 `request-v1.0.N`、更新比较、忽略更新和重启状态继续使用这个编号。
 
 原有的自动检查频率、仅通知或自动下载、网关忙时等待等设置保持不变。即使修改了本地 exe 文件名，更新器仍会按当前 GUI 平台匹配对应的发行资产。开发构建（如 `custom-<sha>`）、元数据不完整的构建及其他平台仍显示手动维护说明。
 
@@ -35,7 +35,7 @@ Windows x64 发行版已在 [分支 Releases](https://github.com/HwH-z1x/magpie-
 1. 读取 `yetone/magpie-releases` 当前标记的正式 Latest，固定 `yetone/magpie` 同名源码标签的提交。
 2. 在 runner 的候选 checkout 合并它。仅两份 README 明确保留分支介绍；代码冲突不会自动偏向任一边，直接失败。
 3. 运行 Go 格式检查、Windows vet、现有 Go suite 的编译检查、现有 update 套件，以及 Chromium/WebKit 上现有更新界面和翻译检查。不生成或修改任何测试代码。这不是完整套件通过的承诺。
-4. 生成 Windows 资源、production exe 和来源元数据。分支版本为独立递增的 `1.0.N`，标签为 `request-v1.0.N`，不会触发原版的 `v*` 发布工作流。
+4. 生成 Windows 资源、production exe 和来源元数据。显示版本取自上游版本号，内部构建编号为独立递增的 `1.0.N`，标签为 `request-v1.0.N`。Release 标题同时列出上游版本和构建编号，不会触发原版的 `v*` 发布工作流。
 5. 再确认维护分支和更新渠道没有被其他提交推进，快进维护分支并创建实验 Release，上传 exe、校验值、来源记录和该版更新清单。
 6. 从 GitHub 回读 exe 验证 SHA256，才公开 Release；最后用一次 Git 提交同时推进 `request-update` 分支的 `latest.json` 与 `notes.json`。
 

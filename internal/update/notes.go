@@ -15,9 +15,10 @@ import (
 
 // Note is one release's notes, as the app shows them after an update.
 type Note struct {
-	Version string `json:"version"` // no v
-	Notes   string `json:"notes"`   // markdown, its Install section taken out
-	URL     string `json:"url,omitempty"`
+	Version        string `json:"version"` // no v
+	DisplayVersion string `json:"displayVersion,omitempty"`
+	Notes          string `json:"notes"` // markdown, its Install section taken out
+	URL            string `json:"url,omitempty"`
 }
 
 // NotesFeed is where the notes of past releases are listed: beside the

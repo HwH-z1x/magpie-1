@@ -73,7 +73,8 @@ jobs:
           UPSTREAM_VERSION: ${{ steps.integrate.outputs.upstream }}
           UPSTREAM_SOURCE: ${{ steps.integrate.outputs.upstream_sha }}
         run: |
-          go run github.com/tc-hib/go-winres@v0.3.3 make --in build/windows/winres.json --arch amd64 --out rsrc --file-version 0.0.0 --product-version 0.0.0
+          $productVersion = $env:UPSTREAM_VERSION.TrimStart('v')
+          go run github.com/tc-hib/go-winres@v0.3.3 make --in build/windows/winres.json --arch amd64 --out rsrc --file-version $productVersion --product-version $productVersion
           if ($LASTEXITCODE) { throw 'Resource generation failed' }
           $flags = "-s -w -H windowsgui -X main.version=$env:FORK_VERSION -X github.com/yetone/magpie/internal/update.SourceCommit=$env:FORK_SOURCE -X github.com/yetone/magpie/internal/update.UpstreamVersion=$env:UPSTREAM_VERSION -X github.com/yetone/magpie/internal/update.UpstreamCommit=$env:UPSTREAM_SOURCE"
           go build -tags production -trimpath -ldflags $flags -o dist/magpie-windows-amd64.exe .

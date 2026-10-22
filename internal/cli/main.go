@@ -165,7 +165,7 @@ func Main(v string) {
 		if len(os.Args) > 1 {
 			switch os.Args[1] {
 			case "-v", "--version", "version":
-				fmt.Println("magpie", version)
+				fmt.Println("magpie", update.DisplayVersion(version))
 				return
 			case "-h", "--help", "help":
 				fmt.Print(usage)
@@ -340,7 +340,7 @@ func run(args []string) error {
 		fmt.Print(usage)
 		return nil
 	case "-v", "--version", "version":
-		fmt.Println("magpie", version)
+		fmt.Println("magpie", update.DisplayVersion(version))
 		return nil
 	case "ls", "list":
 		// in the order the app lists them; those hidden there come last, dimmed

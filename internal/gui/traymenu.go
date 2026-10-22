@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/yetone/magpie/internal/gateway"
+	appupdate "github.com/yetone/magpie/internal/update"
 )
 
 // trayZh is the tray menu in Chinese; the page has its own words
@@ -124,7 +125,7 @@ type trayLabels struct{ open, version, restart, quit string }
 func trayMenuLabels(lang, version, update string) trayLabels {
 	l := trayLabels{
 		open:    trayText(lang, "Open magpie"),
-		version: trayText(lang, "Version %s", version),
+		version: trayText(lang, "Version %s", appupdate.DisplayVersion(version)),
 		restart: trayText(lang, "Restart to Update"),
 		quit:    trayText(lang, "Quit magpie"),
 	}
