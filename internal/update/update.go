@@ -257,6 +257,9 @@ func Writable(dir string) bool {
 // Stage downloads the app in rel and unpacks it next to the installed
 // bundle, ready for Install. It returns the unpacked app.
 func Stage(ctx context.Context, rel *Release, bundle string) (string, error) {
+	if CustomBuild() {
+		return "", ErrCustomUpdate
+	}
 	a, ok := rel.Assets[AppAsset()]
 	if !ok {
 		return "", fmt.Errorf("release %s has no %s", rel.Version, AppAsset())
@@ -325,6 +328,9 @@ func stageDir(dir string) string {
 // magpie's to change the error is a permission one (NeedsAdmin), and
 // InstallAsAdmin can do it instead.
 func Install(staged, bundle string) error {
+	if CustomBuild() {
+		return ErrCustomUpdate
+	}
 	old := filepath.Join(filepath.Dir(staged), "old.app")
 	os.RemoveAll(old)
 	if err := os.Rename(bundle, old); err != nil {
@@ -341,6 +347,9 @@ func Install(staged, bundle string) error {
 // InstallAsAdmin is Install with the administrator's password, asked for
 // by the system.
 func InstallAsAdmin(staged, bundle string) error {
+	if CustomBuild() {
+		return ErrCustomUpdate
+	}
 	old := filepath.Join(filepath.Dir(staged), "old.app")
 	err := asAdmin(swapScript(staged, bundle, old))
 	if err == nil {
@@ -382,6 +391,9 @@ func relaunchOpen(bundle string, window bool) string {
 // ReplaceBinary puts the release's build for this binary where the
 // running one is.
 func ReplaceBinary(ctx context.Context, rel *Release) error {
+	if CustomBuild() {
+		return ErrCustomUpdate
+	}
 	exe, err := Executable()
 	if err != nil {
 		return err
@@ -400,6 +412,9 @@ func ReplaceBinary(ctx context.Context, rel *Release) error {
 // StageBinary downloads the release's build for this binary next to it (or
 // to the cache, where magpie may not write there), ready for InstallBinary.
 func StageBinary(ctx context.Context, rel *Release) (string, error) {
+	if CustomBuild() {
+		return "", ErrCustomUpdate
+	}
 	a, ok := rel.Assets[BinaryAsset()]
 	if !ok {
 		return "", fmt.Errorf("release %s has no %s", rel.Version, BinaryAsset())
@@ -439,6 +454,9 @@ func InstallBinary(staged, exe string) error {
 // (Smart App Control, #894) isn't put in: a *BlockedError, and the
 // download removed.
 func InstallBinaryAside(staged, exe string) (string, error) {
+	if CustomBuild() {
+		return "", ErrCustomUpdate
+	}
 	var old string
 	if runtime.GOOS == "windows" {
 		// tried once per download: a restart clicked again after a failed
@@ -686,6 +704,9 @@ func fileHash(path string) string {
 
 // InstallBinaryAsAdmin is InstallBinary with the administrator's password.
 func InstallBinaryAsAdmin(staged, exe string) error {
+	if CustomBuild() {
+		return ErrCustomUpdate
+	}
 	err := asAdmin("mv -f " + shellQuote(staged) + " " + shellQuote(exe))
 	if err != nil && !errors.Is(err, ErrCanceled) {
 		os.Remove(staged)

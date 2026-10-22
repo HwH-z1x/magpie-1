@@ -53,3 +53,28 @@ production Magpie were changed.
 The updater retains a `remainingChecks` gate. Do not deploy a candidate
 until the required outstanding checks have been completed and recorded.
 It does not automatically advance or push the source maintenance branch.
+
+## Official-update protection follow-up
+
+The fork now calls `update.ProtectCustomBuild` at executable startup. It
+blocks the official desktop download/install/restart path, installation on
+quit, the CLI installer, and low-level staging/install functions, regardless
+of the version label. The desktop update row instead links to the custom
+maintenance guide. Source updates remain the candidate updater's job.
+
+For this follow-up, no test source was written or modified. Passed:
+
+- Windows `go vet ./...` and production desktop build.
+- The existing `internal/update` package tests (15.574s).
+- Existing GUI files `i18n-keys`, `update-check`, `update-restart` and
+  `update-hide`: 65/65, using their Chromium/WebKit and language variants.
+- Node syntax, Go formatting, diff checks and local Markdown-link checks.
+- A manual check of a separate portable executable deliberately labeled
+  `999.0.0`: `update check` returned the custom guide with exit 0;
+  `update` refused official installation with exit 1. Its configured feed
+  pointed at an unavailable loopback endpoint, so neither command depended
+  on a live official feed. No real account data or running app was used.
+
+The preceding failed/incomplete full-suite record remains applicable; this
+follow-up does not claim a green full suite or completed real-agent routing
+and deployment/rollback validation.

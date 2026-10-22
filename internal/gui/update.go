@@ -117,6 +117,12 @@ func updateDue(s settings.Settings, last, now time.Time) bool {
 }
 
 func (u *updater) start() {
+	if update.CustomBuild() {
+		u.mu.Lock()
+		u.state = "custom"
+		u.mu.Unlock()
+		return
+	}
 	u.place(runtime.GOOS, update.GUI)
 	go func() {
 		time.Sleep(5 * time.Second) // let the app settle first
@@ -269,6 +275,10 @@ func (u *updater) freshen() {
 func (u *updater) begin() bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if update.CustomBuild() {
+		u.state = "custom"
+		return false
+	}
 	if u.state == "checking" || u.state == "downloading" {
 		return false
 	}
@@ -277,6 +287,9 @@ func (u *updater) begin() bool {
 }
 
 func (u *updater) run() {
+	if update.CustomBuild() {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	s := settings.Load()
@@ -374,6 +387,9 @@ func (u *updater) run() {
 func (u *updater) install(ask bool) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if update.CustomBuild() {
+		return false
+	}
 	if u.replaced() {
 		// another magpie updated the binary after this one started: it is
 		// in, and swapping this one's download in would move it aside (the
@@ -448,6 +464,9 @@ func (u *updater) json() updateJSON { return u.jsonIn("") }
 // Notes held in another language are asked for again in lang, at most
 // once a minute; the page's next look has them.
 func (u *updater) jsonIn(lang string) updateJSON {
+	if update.CustomBuild() {
+		return updateJSON{State: "custom", Current: Version, URL: update.CustomUpdateGuide}
+	}
 	busy := gatewayBusy()
 	u.mu.Lock()
 	defer u.mu.Unlock()

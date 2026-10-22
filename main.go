@@ -4,6 +4,7 @@ package main
 
 import (
 	"github.com/yetone/magpie/internal/cli"
+	"github.com/yetone/magpie/internal/update"
 	// the built-in plugins, registered with the runtime (internal/pluginrt)
 	_ "github.com/yetone/magpie/plugins/all"
 )
@@ -12,4 +13,7 @@ import (
 // Dockerfile, magpie-releases), so it stays in package main.
 var version = "dev"
 
-func main() { cli.Main(version) }
+func main() {
+	update.ProtectCustomBuild()
+	cli.Main(version)
+}

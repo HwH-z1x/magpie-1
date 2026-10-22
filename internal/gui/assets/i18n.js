@@ -4,6 +4,8 @@
 // works. {name} slots are filled by t(str, vars).
 const I18N = {
   zh: {
+    "Custom build: official binary updates are disabled. Update the fork source and rebuild.": "定制版已禁用官方二进制更新。请更新分支源码后重新构建。",
+    "Custom build update guide": "定制版更新说明",
     "None": "无",
     "Prompt": "提示词",
     "Request hook": "请求 Hook",
@@ -3875,6 +3877,8 @@ const I18N = {
     "Audio": "音频",
   },
   "zh-TW": {
+    "Custom build: official binary updates are disabled. Update the fork source and rebuild.": "自訂版已停用官方二進位更新。請更新分支原始碼後重新建置。",
+    "Custom build update guide": "自訂版更新說明",
     "None": "無",
     "Prompt": "提示詞",
     "Request hook": "請求 Hook",
@@ -7731,6 +7735,8 @@ const I18N = {
     "Audio": "音訊",
   },
   ja: {
+    "Custom build: official binary updates are disabled. Update the fork source and rebuild.": "カスタム版では公式バイナリへの更新を無効にしています。フォークのソースを更新して再ビルドしてください。",
+    "Custom build update guide": "カスタム版の更新手順",
     "None": "なし",
     "Prompt": "プロンプト",
     "Request hook": "リクエストフック",
@@ -11589,6 +11595,8 @@ const I18N = {
     "Audio": "音声",
   },
   de: {
+    "Custom build: official binary updates are disabled. Update the fork source and rebuild.": "Offizielle Binärupdates sind für diesen eigenen Build deaktiviert. Fork-Quellcode aktualisieren und neu bauen.",
+    "Custom build update guide": "Update-Anleitung für diesen Build",
     "None": "Keine",
     "Prompt": "Prompt",
     "Request hook": "Anfrage-Hook",

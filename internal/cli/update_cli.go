@@ -152,6 +152,13 @@ func updateCmd(args []string) error {
 	if len(args) > 2 || len(args) == 2 && args[1] != "check" {
 		return fmt.Errorf("usage: magpie update [check] [--proxy <url>] [--mirror <prefix>]")
 	}
+	if update.CustomBuild() {
+		if len(args) == 2 && args[1] == "check" {
+			fmt.Println("magpie", version, "is a protected custom build; update its source and rebuild:", update.CustomUpdateGuide)
+			return nil
+		}
+		return update.ErrCustomUpdate
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	ctx = update.WithMirror(update.WithProxy(ctx, proxy), mirror)

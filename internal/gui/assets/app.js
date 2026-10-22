@@ -23351,6 +23351,11 @@ async function renderUpdate(r, u) {
     setTimeout(() => { if (r.isConnected && (updateSeq.get(r) || 0) === seen) renderUpdate(r); }, ms);
   };
   switch (u.state) {
+    case "custom":
+      sub.textContent = t("Custom build: official binary updates are disabled. Update the fork source and rebuild.");
+      sub.classList.add("wraps");
+      if (u.url) btn(t("Custom build update guide"), () => (web ? window.open(u.url, "_blank", "noopener") : api("open", { url: u.url })));
+      break;
     case "ready": {
       sub.textContent = t("{v} is downloaded", { v: u.latest }) + (u.error ? " · " + u.error : "");
       // a failed install says why in full, and offers the release page to

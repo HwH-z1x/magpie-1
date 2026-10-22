@@ -7,6 +7,26 @@ with no binding generator and no bundler. `magpie web` serves the same page
 to a browser for a machine with no desktop. Package `internal/gui` hosts all
 three.
 
+## Custom fork update policy
+
+This fork's executable calls `update.ProtectCustomBuild` from `main` before
+starting any CLI or GUI path. The process-local policy in
+[`internal/update/custom.go`](../../internal/update/custom.go) is independent
+of the version label. The desktop updater starts in `custom` state, does
+not start its official feed loop, and refuses both staging and installation.
+`jsonIn` returns the custom guide instead of a downloaded release, so the
+Settings row offers a guide link and no restart-to-update action. The CLI
+also handles `update check` locally and refuses an official install.
+
+The package's staging/installing functions reject a protected process too,
+including administrator-assisted replacement. This keeps a stale in-memory
+staged update from being installed on quit or through a direct endpoint.
+Normal quit/relaunch is unaffected. External installers and a separate
+official process are outside this process's control; a dedicated portable
+directory and correct shortcuts remain necessary. Source maintenance uses
+[`build/update-custom.ps1`](../../build/update-custom.ps1); it is not run
+from the GUI. See the [custom build guide](../custom-request-routing.zh-CN.md).
+
 ## Responsibilities and sources of truth
 
 | Part | Responsibility | Source |
