@@ -1,12 +1,11 @@
 # Magpie 每请求意图路由：同轮工具调用动态选模
 
-**同一轮对话中，每个模型请求都重新运行意图判断，包括工具结果续接请求，不必等用户再次发言。**
+**同一轮对话中，每个模型请求都重新运行意图判断，包括工具结果续接请求。**
 
 [English](README.md) · [修改版主线](https://github.com/HwH-z1x/magpie-1/tree/main) · [操作与更新说明](docs/custom-request-routing.zh-CN.md) · [验证状态](docs/custom-request-routing-validation.md) · [上游 Magpie](https://github.com/yetone/magpie)
 
-这是一个非官方 Magpie fork，面向使用 Codex、Claude Code 等 Agent，希望在一次任务的工具循环中按阶段选择模型的用户。沿用路由组、分类器接入、规则顺序和故障转移，增加“按轮 / 每请求”开关，无需额外编写路由插件。
+这是一个非官方 Magpie fork，面向使用 Codex、Claude Code 等 Agent，希望在同一轮对话中，每个模型请求都重新运行意图判断的用户。沿用路由组、分类器接入、规则顺序和故障转移，增加“按轮 / 每请求”开关，无需额外编写路由插件。
 
-**默认 `main` 就是本修改版：项目首页、日常维护和自动构建统一使用它，不再把原版作为首页。**
 
 [下载 Windows 修改版](https://github.com/HwH-z1x/magpie-1/releases?q=request-v&expanded=true) · [查看构建状态](https://github.com/HwH-z1x/magpie-1/actions/workflows/custom-release.yml)
 
