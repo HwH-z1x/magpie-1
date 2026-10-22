@@ -4,7 +4,7 @@
 
 客户端每次更新下载的都是“上游正式版源码 + 本分支修改”重新编译后的完整程序，而不是下载官方 exe 再打补丁。当前仅发布 Windows x64 桌面版，更新渠道标识为 `request-intent`（实验发行）。每个 Release 附带的 `build.json` 会公开当次构建已执行的检查范围与未验项目。
 
-Windows x64 发行版已在 [分支 Releases](https://github.com/HwH-z1x/magpie-1/releases?q=request-v&expanded=true) 持续发布，构建记录可在 [Actions](https://github.com/HwH-z1x/magpie-1/actions/workflows/custom-release.yml) 查看。请勿用官方原版安装包替代分支发行包。
+Windows x64 发行版已在 [分支 Releases](https://github.com/HwH-z1x/magpie-1/releases/latest) 持续发布，构建记录可在 [Actions](https://github.com/HwH-z1x/magpie-1/actions/workflows/custom-release.yml) 查看。请勿用官方原版安装包替代分支发行包。
 
 最新通过发布检查的安装包会标记为 GitHub 的 Latest，显示在仓库首页。这个标记用于提供下载入口，验证范围仍以发行说明和 `build.json` 为准。早期版本曾标为 Pre-release，因此首页没有 Latest；维护者可手动运行 `Show Current Fork Release`，校验当前更新渠道中的安装包后恢复首页入口。
 

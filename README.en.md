@@ -2,7 +2,7 @@
 
 **Reclassify every model request—including tool calls and tool-result continuations—within the same agent turn.**
 
-[简体中文](README.md) · [Download Windows builds](https://github.com/HwH-z1x/magpie-1/releases?q=request-v&expanded=true) · [Build status](https://github.com/HwH-z1x/magpie-1/actions/workflows/custom-release.yml) · [Operation guide (ZH)](docs/custom-request-routing.zh-CN.md) · [Release channel guide (ZH)](docs/custom-release-channel.zh-CN.md) · [Validation record](docs/custom-request-routing-validation.md) · [Upstream Magpie](https://github.com/yetone/magpie)
+[简体中文](README.md) · [Download Windows EXE](https://github.com/HwH-z1x/magpie-1/releases/latest/download/magpie-windows-amd64.exe) · [Latest release](https://github.com/HwH-z1x/magpie-1/releases/latest) · [Release history](https://github.com/HwH-z1x/magpie-1/releases) · [Build status](https://github.com/HwH-z1x/magpie-1/actions/workflows/custom-release.yml) · [Operation guide (ZH)](docs/custom-request-routing.zh-CN.md) · [Release channel guide (ZH)](docs/custom-release-channel.zh-CN.md) · [Validation record](docs/custom-request-routing-validation.md) · [Upstream Magpie](https://github.com/yetone/magpie)
 
 This unofficial Magpie fork adds **per-request intent routing** for multi-step coding agents such as Codex, Claude Code, and OpenCode. In the upstream revision this fork is based on, same-turn tool requests normally reuse the intent decision made at the start of the turn; existing failover and context-limit handling still apply. This fork adds a **Per turn / Per request** rule-evaluation switch to routing groups while preserving existing classifiers, rule priority, nested groups, failover, and live routing traces—without external plugins or splitting work into subagents.
 
@@ -37,7 +37,7 @@ Upstream Magpie routes a subagent turn separately based on the subagent's own in
 
 ## Enable per-request classification
 
-1. Download the latest `magpie-windows-amd64.exe` from [Releases](https://github.com/HwH-z1x/magpie-1/releases?q=request-v&expanded=true) (or build from source), quit upstream Magpie, and launch this fork.
+1. Download the latest `magpie-windows-amd64.exe` from [Releases](https://github.com/HwH-z1x/magpie-1/releases/latest) (or build from source), quit upstream Magpie, and launch this fork.
 2. In **Routing**, edit your target group and set **Rule evaluation → Per-request decision**.
 3. Select a classifier model and configure intent rules, placing generic fallback rules after intent rules.
 4. Point your agent to the routing group. Enable per-request evaluation separately on any nested child groups that should also reclassify on each request.

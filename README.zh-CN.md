@@ -2,7 +2,7 @@
 
 **同一轮对话中，每个模型请求都重新运行意图判断，包括工具结果续接请求。**
 
-[下载 Windows 修改版](https://github.com/HwH-z1x/magpie-1/releases?q=request-v&expanded=true) · [构建状态](https://github.com/HwH-z1x/magpie-1/actions/workflows/custom-release.yml) · [操作与更新说明](docs/custom-request-routing.zh-CN.md) · [在线更新机制](docs/custom-release-channel.zh-CN.md) · [验证状态](docs/custom-request-routing-validation.md) · [English](README.en.md) · [上游 Magpie](https://github.com/yetone/magpie)
+[下载 Windows 修改版（exe）](https://github.com/HwH-z1x/magpie-1/releases/latest/download/magpie-windows-amd64.exe) · [最新版发布说明](https://github.com/HwH-z1x/magpie-1/releases/latest) · [历史版本](https://github.com/HwH-z1x/magpie-1/releases) · [构建状态](https://github.com/HwH-z1x/magpie-1/actions/workflows/custom-release.yml) · [操作与更新说明](docs/custom-request-routing.zh-CN.md) · [在线更新机制](docs/custom-release-channel.zh-CN.md) · [验证状态](docs/custom-request-routing-validation.md) · [English](README.en.md) · [上游 Magpie](https://github.com/yetone/magpie)
 
 这是一个非官方 Magpie 修改版，面向使用 Codex、Claude Code、OpenCode 等多步工具调用 Agent 的用户。在本分支所基于的上游版本中，意图判断发生在每轮开始时，同轮后续请求通常沿用这次判断。本分支在路由组中新增**按轮 / 每请求**判断频率开关，直接复用原有的路由组、分类模型、规则顺序、子组嵌套、故障转移和路由页实时动画，无需额外编写路由插件，也不必把任务拆成子代理。
 
@@ -38,7 +38,7 @@
 
 ## 如何开启
 
-1. 从 [Releases](https://github.com/HwH-z1x/magpie-1/releases?q=request-v&expanded=true) 下载最新的 `magpie-windows-amd64.exe`（或按下方步骤从源码构建），先退出正在运行的原版 Magpie，再启动本分支程序。
+1. 从 [Releases](https://github.com/HwH-z1x/magpie-1/releases/latest) 下载最新的 `magpie-windows-amd64.exe`（或按下方步骤从源码构建），先退出正在运行的原版 Magpie，再启动本分支程序。
 2. 在**路由（Routing）**页面编辑目标路由组，将**规则判断频率**设为**每请求**。
 3. 选择分类模型并添加意图规则，把不带意图的通用兜底规则放在意图规则后面。
 4. 在 **Agent** 页面让目标 Agent 使用该路由组。如果组内嵌套了子组，且希望子组也按每请求判断，请对子组分别开启。
@@ -58,7 +58,7 @@
 不会。Windows x64 发行版保留了 Magpie 原有的“检查更新 → 下载 → 重启更新”流程，但更新源固定指向本仓库的专属渠道（`request-update` 分支与 `request-v*` 发行包），**绝不回退到官方原版二进制**。
 
 - **自动同步上游**：GitHub Actions 在**北京时间每天 08:00–23:00 每小时整点**自动检查上游正式版（00:00–08:00 不检查）。发现上游新版本或本分支新提交时，流水线会自动合并上游正式版源码、运行检查、编译带每请求路由功能的 exe，并在回读校验 SHA256 后更新发布清单。若合并冲突或检查失败则停止发布，现有可用版本保持不变。
-- **首次切换**：从原版或本地 `custom-<sha>` 开发构建切换过来时，需先手动下载安装一次[分支发行版](https://github.com/HwH-z1x/magpie-1/releases?q=request-v&expanded=true)；安装后即可直接在软件内点击“重启更新”，无需在本机安装 Git 或 Go。详细机制见[分支发行与重启更新说明](docs/custom-release-channel.zh-CN.md)。
+- **首次切换**：从原版或本地 `custom-<sha>` 开发构建切换过来时，需先手动下载安装一次[分支发行版](https://github.com/HwH-z1x/magpie-1/releases/latest)；安装后即可直接在软件内点击“重启更新”，无需在本机安装 Git 或 Go。详细机制见[分支发行与重启更新说明](docs/custom-release-channel.zh-CN.md)。
 - **目录与备份建议**：建议将程序放在独立目录，并在 exe 旁新建 `.portable` 文件隔离配置。首次切换前请退出官方版并备份数据，确认快捷方式和开机启动项指向本分支程序。二进制启动恢复不等于配置数据回滚，升级前请保留备份。离线源码维护仍可使用 [PowerShell 助手](build/update-custom.ps1)。
 
 软件显示版本与当次合入的原版版本号对齐。内部构建编号和发行标签仍独立递增，保证同一原版下的分支修复也能一键更新。
