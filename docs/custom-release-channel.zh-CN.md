@@ -17,7 +17,7 @@
 
 ## GitHub 维护流程
 
-入口为 `.github/workflows/custom-release.yml`：每六小时检查一次，也可手动运行，维护分支有新提交时也会运行。默认分支只需同名入口，它调用 `custom/request-intent` 上的可复用流水线，实际源码仍从维护分支检出；不需要把全部私改代码混入原 `main`。
+入口为 `.github/workflows/custom-release.yml`：北京时间每天 **08:00–23:00 每小时整点**检查一次，00:00–08:00 不自动检查。维护分支有新提交也会触发，但同样遵守夜间静默；手动运行不受此限制。GitHub 可能延迟调度，入口和实际查询前都会复核时段。已开始的构建不因跨过午夜而强制中断。默认分支只需同名入口，它调用 `custom/request-intent` 上的可复用流水线，实际源码仍从维护分支检出；不需要把全部私改代码混入原 `main`。
 
 仓库须启用 Actions，允许本仓库工作流请求 `contents: write`。只使用内置 `GITHUB_TOKEN`，不需要个人 PAT、官方签名密钥或租用服务器。GitHub 对 fork、可复用工作流和第三方 Actions 的仓库/组织限制仍适用。定时任务只由默认分支触发；长时间无仓库活动时也可能被 GitHub 停用，可从 Actions 重新启用。
 

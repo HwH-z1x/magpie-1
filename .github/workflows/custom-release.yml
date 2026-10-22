@@ -2,7 +2,8 @@ name: Request Intent Releases
 
 on:
   schedule:
-    - cron: '23 */6 * * *'
+    # UTC 00:00-15:00 is Asia/Shanghai 08:00-23:00.
+    - cron: '0 0-15 * * *'
   workflow_dispatch:
   push:
     branches: [custom/request-intent]
@@ -15,6 +16,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  window:
     if: github.repository == 'HwH-z1x/magpie-1'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.hours.outputs.allowed }}
+    steps:
+      - name: Respect the Beijing overnight quiet window
+        id: hours
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          hour=$(TZ=Asia/Shanghai date +%H)
+          if [[ "$EVENT_NAME" == workflow_dispatch ]] || (( 10#$hour >= 8 )); then
+            echo 'allowed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'allowed=false' >> "$GITHUB_OUTPUT"
+          fi
+  release:
+    needs: window
+    if: needs.window.outputs.allowed == 'true'
     uses: HwH-z1x/magpie-1/.github/workflows/custom-release-pipeline.yml@custom/request-intent

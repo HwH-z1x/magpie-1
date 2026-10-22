@@ -2,6 +2,7 @@
 
 import argparse
 import base64
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -62,6 +63,13 @@ def output(key, value):
 
 
 def prepare(state):
+    # A runner may be queued past the caller's window check. Do not start
+    # an automatic upstream query overnight, even after a scheduling delay.
+    if os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+        if datetime.now(timezone(timedelta(hours=8))).hour < 8:
+            output("build", "false")
+            print("Automatic checks paused until 08:00 Asia/Shanghai")
+            return
     if run("git", "status", "--porcelain"):
         raise RuntimeError("Checkout must be clean before integration")
     base = run("git", "rev-parse", "HEAD")
