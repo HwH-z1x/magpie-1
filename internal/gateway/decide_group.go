@@ -297,6 +297,9 @@ func (s *Server) askDecider(p provider.Provider, model string, intents []string,
 // when none does.
 func (s *Server) askDecideTries(cs []candidate, intents []string, prev before, effort bool, text string) (v verdict, err error) {
 	for _, c := range cs {
+		if err := classifierContext(prev).Err(); err != nil {
+			return verdict{}, err
+		}
 		if v, err = s.askJev(c.p, c.model, intents, prev, effort, text); err == nil {
 			servedCandidate(c, 0)
 			return v, nil

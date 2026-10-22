@@ -1917,6 +1917,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// asks no classifier in turn: one that is, however far round, the group
 	// asking would ask itself for ever
 	ask := s.askClassifier
+	ask = func(model string, intents []string, prev before, effort bool, text string) (verdict, error) {
+		if prev.request {
+			ctx, cancel := context.WithTimeout(r.Context(), classifyTimeout)
+			defer cancel()
+			prev.ctx = ctx
+		}
+		return s.askClassifier(model, intents, prev, effort, text)
+	}
 	if r.Header.Get("User-Agent") == RouterAgent {
 		ask = nil
 	}

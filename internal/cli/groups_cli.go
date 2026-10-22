@@ -34,6 +34,7 @@ const groupUsage = `usage:
                                           it is in follow; an agent set to the old id needs setting again),
                                           effort=auto (the classifier picks each turn's reasoning; needs classifier=),
                                           effort=agent (the agent's again), classifier=<provider/model>|group/<id>,
+                                          rule-scope=turn|request (when rules and the classifier run),
                                           pick=<model> (routing=manual, every request to that one of its models),
                                           fast=<m1>[,m2…] (the models sent in their vendor's fast mode; empty for none),
                                           weight=<m1>=<n>[,m2=<n>…] (each model's share under routing=weight,
@@ -507,6 +508,8 @@ func applyGroupPairs(g *provider.Group, pairs []string, resolve func(string) (st
 			}
 		case "classifier", "classify":
 			g.Classifier = strings.TrimPrefix(strings.TrimSpace(v), "magpie/")
+		case "rule-scope":
+			g.RuleScope = v
 		case "fast":
 			// the members sent in their vendor's fast mode, as they are in
 			// the group
@@ -1162,6 +1165,9 @@ func showGroup(g provider.Group) error {
 			what = "  rates how hard each turn is"
 		}
 		kv("classifier", g.Classifier+muted.Render(what))
+	}
+	if g.RuleScope != "" {
+		kv("rule-scope", g.RuleScope)
 	}
 	if u := groupUses()[g.ID]; len(u) > 0 {
 		kv("used by", green.Render(strings.Join(u, ", ")))

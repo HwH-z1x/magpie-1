@@ -1,9 +1,10 @@
 package gateway
 
 // A rule with an intent (provider.Rule.Intent) is for a kind of message:
-// as a user's turn begins, the group's classifier model is asked which of
-// the intents the user's message is — once, before the turn goes anywhere,
-// and never again within it. The call goes through magpie itself, so the
+// by default as a user's turn begins, the group's classifier model is asked
+// which of the intents the user's message is, once for the turn. A group
+// with request scope instead classifies each request's execution state.
+// The call goes through magpie itself, so the
 // classifier is any model magpie has, with its keys, failover and usage;
 // it shows in the usage as magpie's own call. When it can't say
 // (it fails, is slow, or answers something else) no intent matches, and
@@ -48,10 +49,12 @@ type classifier func(model string, intents []string, prev before, effort bool, t
 // what was said in it (turnBefore): a short follow-up (继续, fix that) says
 // little of its own, and is judged with what it follows.
 type before struct {
-	Intent string // one of the intents asked about now, or ""
-	Effort string // the reasoning picked for it, or ""
-	User   string // the user's message before this one (userSaid), cut to priorCap; "" for none
-	Reply  string // the assistant's last words before this message, its text alone, cut to priorCap; "" for none
+	request bool
+	ctx     context.Context
+	Intent  string // one of the intents asked about now, or ""
+	Effort  string // the reasoning picked for it, or ""
+	User    string // the user's message before this one (userSaid), cut to priorCap; "" for none
+	Reply   string // the assistant's last words before this message, its text alone, cut to priorCap; "" for none
 }
 
 // verdict is what a classifier said.
@@ -104,6 +107,17 @@ type answerError struct{ error }
 // making every turn wait out its timeout. Concurrent calls asking the
 // same question share the answer in flight.
 func classify(ask classifier, model string, intents []string, prev before, effort bool, text string) (v verdict, cached bool, err error) {
+	if prev.request {
+		v, err = ask(model, intents, prev, effort, text)
+		classified.Lock()
+		defer classified.Unlock()
+		if err != nil {
+			classified.last[model] = classifyFailure{err: err.Error(), at: time.Now()}
+		} else {
+			delete(classified.last, model)
+		}
+		return v, false, err
+	}
 	h := sha256.New()
 	h.Write([]byte(model + "\x00" + strings.ToLower(strings.Join(intents, "\x00")) + "\x00" + prev.Intent + "\x00" + prev.Effort + "\x00" + prev.User + "\x00" + prev.Reply + "\x00" + strconv.FormatBool(effort) + "\x00" + text))
 	key := hex.EncodeToString(h.Sum(nil))
@@ -280,10 +294,14 @@ func classifyBody(model, effort string, intents []string, prev before, text stri
 	b.WriteString("\nThe user's message:\n<message>\n")
 	b.WriteString(text)
 	b.WriteString("\n</message>\n\nThe number of the kind that fits it best (0 only if none does):")
+	prompt := classifyPrompt
+	if prev.request {
+		prompt += requestClassifyPrompt
+	}
 	req := map[string]any{
 		"model": model,
 		"messages": []map[string]string{
-			{"role": "system", "content": classifyPrompt},
+			{"role": "system", "content": prompt},
 			{"role": "user", "content": b.String()},
 		},
 		"stream":      false,
@@ -367,7 +385,7 @@ func (s *Server) askClassifier(model string, intents []string, prev before, effo
 		go func() {
 			defer wg.Done()
 			var a string
-			if a, ierr = s.askChat(model, classifyBody(model, classifyEffort(model), intents, prev, text)); ierr == nil {
+			if a, ierr = s.askChatContext(classifierContext(prev), model, classifyBody(model, classifyEffort(model), intents, prev, text)); ierr == nil {
 				v.Intent, ierr = readIntent(a, intents)
 			}
 		}()
@@ -377,7 +395,7 @@ func (s *Server) askClassifier(model string, intents []string, prev before, effo
 		go func() {
 			defer wg.Done()
 			var a string
-			if a, eerr = s.askChat(model, effortBody(model, classifyEffort(model), prev, text)); eerr == nil {
+			if a, eerr = s.askChatContext(classifierContext(prev), model, effortBody(model, classifyEffort(model), prev, text)); eerr == nil {
 				v.Effort, v.Score, eerr = readEffort(a)
 			}
 		}()
@@ -413,10 +431,14 @@ func effortBody(model, effort string, prev before, text string) []byte {
 	b.WriteString("\nThe user's message:\n<message>\n")
 	b.WriteString(text)
 	b.WriteString("\n</message>\n\nThe number of the level it needs:")
+	prompt := effortPrompt
+	if prev.request {
+		prompt += requestClassifyPrompt
+	}
 	req := map[string]any{
 		"model": model,
 		"messages": []map[string]string{
-			{"role": "system", "content": effortPrompt},
+			{"role": "system", "content": prompt},
 			{"role": "user", "content": b.String()},
 		},
 		"stream":      false,
@@ -447,7 +469,11 @@ func readEffort(answer string) (string, float64, error) {
 // askChat sends a chat model body through the gateway and returns its
 // answer's text.
 func (s *Server) askChat(model string, body []byte) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), classifyTimeout)
+	return s.askChatContext(context.Background(), model, body)
+}
+
+func (s *Server) askChatContext(parent context.Context, model string, body []byte) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, classifyTimeout)
 	defer cancel()
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://magpie/v1/chat/completions", nil)
 	if err != nil {

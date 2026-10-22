@@ -1,0 +1,55 @@
+# Custom request routing: validation record
+
+Date: 2026-10-22. Base: `8a99473ed90567da3a310c61440e8392dda41ba2`.
+
+This is a development build, not a verified release. The user explicitly
+prohibited writing any test code. No test source or fixtures were added or
+edited; all executed tests were already in the repository.
+
+## Passed
+
+- Go 1.26.8 Windows/amd64 desktop build, with the official winres icon,
+  version and DPI resources, CGO disabled.
+- Windows `go vet ./...`; Linux `go vet -tags nogui ./...` and Linux
+  `go build -tags nogui` cross-build.
+- `gofmt -l` on the changed Go sources, `git diff --check`, Node syntax
+  checks for the routing client and translations, and PowerShell parser
+  validation for `build/update-custom.ps1`.
+- The existing GUI behavior files `group-duplicate`, `group-share`,
+  `group-editor-fits` and `routing-intent-fallback`: 52 passing cases on
+  Chromium/WebKit, including their existing language and width variants.
+- The existing `i18n-keys.test.cjs`: 3/3 after changing a new routing label
+  to avoid colliding with core wording. The initial combined run was 54/55;
+  its sole failure was that label, subsequently fixed and rechecked.
+- The provider package's existing selected group/rule/classifier cases
+  (`go test -tags nogui ./internal/provider` with the routing name filter).
+
+## Failed or incomplete
+
+The existing `go test -tags nogui ./...` did not pass. The agent package
+reported failures including `TestAsideOfflineDisconnectRestoresWithoutDaemon`,
+`TestClaudeDesktopCarriesTheLanguage`, `TestCodexSignInInKeychain`,
+`TestCopilotFolderFromAnIDEPluginIsNotTheCLI`,
+`TestQoderSettingsFromAnIDEPluginIsNotTheCLI`, and
+`TestIsMagpieKeptWhileCatalogStays`, then hit its ten-minute timeout.
+These failures involve native fixtures, filesystem expectations, sign-in
+fixtures and allocation counts; their baseline status has not been proven.
+They are not dismissed as harmless or attributed to the upstream without
+verification. The stalled full-suite runner was stopped after recording
+the failure.
+
+A separate selected run over provider, CLI, GUI and gateway completed the
+provider package, but did not produce completed results for the other
+packages before the runner stalled and was stopped. Those packages are
+not marked passing. Full logs are retained locally in `.git/existing-tests.log`
+and `.git/final-routing-tests.log`.
+
+Not run: the full GUI suite, race checks, a real Agent conversation with
+multiple in-turn model changes, real supplier compatibility/cost checks,
+or a deployment/rollback exercise. Existing checks do not specifically
+prove the new request-mode guarantees. No account settings or running
+production Magpie were changed.
+
+The updater retains a `remainingChecks` gate. Do not deploy a candidate
+until the required outstanding checks have been completed and recorded.
+It does not automatically advance or push the source maintenance branch.

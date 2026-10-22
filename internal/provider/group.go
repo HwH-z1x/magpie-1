@@ -69,6 +69,10 @@ const (
 // effort (Group.Effort).
 const EffortAuto = "auto"
 
+// RuleScopeRequest evaluates rules and asks the classifier on every request.
+// An empty RuleScope keeps the decision for the user's turn.
+const RuleScopeRequest = "request"
+
 // Ruled reports whether the group decides anything as a user's turn
 // begins: a rule to put a member first, or the turn's effort. A pause
 // rule decides nothing then (PausedOut is looked at on every request).
@@ -188,7 +192,8 @@ type Group struct {
 	Pick string `json:"pick,omitempty"`
 	// Rules send the requests they match to one member first, in order:
 	// the first that matches decides (see Rule).
-	Rules []Rule `json:"rules,omitempty"`
+	Rules     []Rule `json:"rules,omitempty"`
+	RuleScope string `json:"ruleScope,omitempty"`
 	// Classifier is the model ("provider/model") asked which of the rules'
 	// intents a user's message is, or a group ("group/<id>", never this
 	// one) whose models are asked in turn, failing over as for any request.
@@ -1286,6 +1291,16 @@ func SaveGroup(g Group) error {
 		return err
 	}
 	g.Rules = rules
+	g.RuleScope = strings.ToLower(strings.TrimSpace(g.RuleScope))
+	if g.RuleScope == "turn" {
+		g.RuleScope = ""
+	}
+	if g.RuleScope != "" && g.RuleScope != RuleScopeRequest {
+		return fmt.Errorf("rule-scope must be turn or request, not %q", g.RuleScope)
+	}
+	if g.RuleScope == RuleScopeRequest && g.Affinity == AffinityStrict {
+		return errors.New("per-request rules cannot be combined with strict session affinity")
+	}
 	if g.Levels, err = CleanLevels(g.Levels); err != nil {
 		return err
 	}

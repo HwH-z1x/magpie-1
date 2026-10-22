@@ -11,6 +11,56 @@ This page covers how a request is routed. Plugins that change requests and
 replies are in [Gateway middleware](gateway-middleware.md). Subscriptions
 served by a plugin are in [Provider and plugin ownership](provider-plugins.md).
 
+## Per-request rules in the custom build
+
+`Group.RuleScope` in [`group.go`](../../internal/provider/group.go) is empty
+for the existing turn-based behavior, or `request` for a fresh decision on
+each incoming generation request. `SaveGroup` normalizes `turn` to empty
+and refuses other values and request scope combined with strict affinity.
+The CLI sets it with `group set <id> rule-scope=request`. The group editor
+offers Per turn / Every request separately from account affinity. Copies,
+shares and the JSON API retain the field; older versions may drop it when
+saving. Nested groups use their own scope, not their parent's.
+
+In request scope, `ruleFor` skips the within-turn reuse and gathers every
+non-pause intent in rule order (`requestIntents`), even after a matching
+non-intent rule. `MatchRule`, `ThenUses`, nested groups and failover still
+apply their existing priority and eligibility checks. Compaction requests
+classify before their compact rules and capacity filter. Manual routing
+keeps its explicit pick. An explicit account restriction still limits the
+candidates; classification cannot bypass it.
+
+`requestText` in [`classify_request.go`](../../internal/gateway/classify_request.go)
+builds JSON execution state from the user's task and the most recent text,
+tool calls/results and attachment types in that turn. No system prompt,
+reasoning, signatures or binary attachments are included. At most twelve
+actions are kept; individual values are cut and serialized state is capped
+at 10000 runes, with up to 2000 more from `turnBefore`. Ordinary and
+System One classifiers are instructed to judge the next step from these
+untrusted data, and retain their existing masking paths.
+
+`classify` calls the classifier directly in request scope: no successful
+result cache, in-flight sharing, or classifier-layer failure cooldown.
+Provider rate limits, account rest and failures still apply. The incoming
+request supplies a cancellation context and a shared classification
+timeout across decision failover. Each incoming request has a local
+verdict; a sequence prevents an older decision from replacing newer shared
+state. Previous valid intent is only a failure fallback. Existing effort
+cache-warming behavior remains in force, so the requested effort may stay
+higher than the fresh classifier pick.
+
+`RuleHit.PerRequest`, `Classified.Attempted` and `Classified.Truncated` let
+the Routing page explain the current decision without claiming it was held
+from the turn's start. Classification calls still count as Magpie's own
+routing usage. A chat classifier may need separate intent and effort
+requests. Internal classifier calls keep the recursion guard, and a retry
+or vendor failover within one incoming request does not reclassify.
+
+See [the custom build guide](../custom-request-routing.zh-CN.md) for Windows
+builds and candidate updates. No new test code accompanies this custom
+change, as explicitly requested by its user; validation uses existing
+checks and builds and is recorded in the delivery notes.
+
 WorkBuddy and CodeBuddy Code's `X-Conversation-ID` is a native session header
 in `sessionHeaders` (`sessionOf`, `nativeSessionOf`, `conversationID` in
 [`gateway.go`](../../internal/gateway/gateway.go)). It keeps their requests

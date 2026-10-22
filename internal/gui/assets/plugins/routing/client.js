@@ -724,6 +724,7 @@ function routingPage(part) {
     if (!r.rule || r.rule.bare) return null;
     const x = { ...r.rule, use: useName(r, r.rule.use) };
     const when = (x.when || []).map(condText).join(", ");
+    if (x.perRequest && x.use && !x.unready && lead) return t("Request rule {n}: {when} → {use}. Failover follows the matching rules, then the group.", { n: x.n, when, use: x.use });
     // the folder the agent said it works in, when a rule asks for one
     const dir = x.folder ? " " + t("The agent works in {folder}.", { folder: x.folder }) : "";
     if (x.use && !x.unready) {
@@ -795,6 +796,11 @@ function routingPage(part) {
     if (!c) return x?.pick ? t("Turn {turn} reasons at {level}, as the classifier picked when it began.", { turn: x.turn, level: x.pick }) : null;
     const r = { rule: x };
     const by = c.by || t("the classifier"), kinds = (c.intents || []).map((x) => `“${x}”`).join(", ");
+    if (x.perRequest) {
+      if (c.error) return t("Request classification failed: {error}. Fallback: {intent}.", { error: c.error, intent: c.fallback ? c.intent : "—" });
+      if (!c.attempted) return null;
+      return t("{by} classified this request from its current execution state: {intent}; reasoning: {effort}; {ms}. No classification cache.", { by, intent: c.intent || "—", effort: c.effort || "—", ms: took(c.ms) }) + (c.truncated ? " " + t("Execution state was shortened.") : "");
+    }
     // it couldn't say, and the turn keeps the intent the turn before had
     // (#1826), rather than going with none
     if (c.error && c.fallback === "previous" && c.intent) return t("{by} was to tell which of {kinds} turn {turn} is, but couldn't — {err} — so the turn keeps “{intent}”, as turn {prev} was.", { by, kinds, turn: r.rule.turn, err: c.error, intent: c.intent, prev: r.rule.turn - 1 });
@@ -4033,7 +4039,7 @@ function routingPage(part) {
   // there, rather than leaving the slot empty.
   const openGroupEditor = async (g) => {
     if (groupDirty() && !(await confirmDiscard())) return false;
-    gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: !!g.sink, unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: patienceOf(g.patience), context: g.context || 0, classifier: g.classifier || "", effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
+    gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", ruleScope: g.ruleScope || "", sink: !!g.sink, unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: patienceOf(g.patience), context: g.context || 0, classifier: g.classifier || "", effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
     renderGroups();
     return true;
   };
@@ -4491,6 +4497,7 @@ function routingPage(part) {
     const m = withJS(GROUP_ROUTE_OPTS, g.routing).find(([id]) => id === (g.routing || "")) || ROUTE_OPTS[0];
     const tags = el("span", "tags");
     tags.append(el("span", "tag", t(m[1])));
+    if (g.ruleScope === "request") tags.append(el("span", "tag", t("Per-request decision")));
     if (g.affinity) tags.append(el("span", "tag", t(AFF_OPTS.find(([id]) => id === g.affinity)?.[1] || "")));
     if (g.sink && sinkable(g.routing || "")) {
       const k = el("span", "tag sink", t("Rate limited to the back"));
@@ -4658,7 +4665,7 @@ function routingPage(part) {
       b.onclick = (e) => {
         e.stopPropagation(); // the card opens the editor; this picks
         if (on) return;
-        groupAction("save", { id: g.id, name: g.name, members: namedOf(g), match: g.match || [], routing: "manual", pick: id, affinity: g.affinity || "", sink: !!g.sink, firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, unlists: !!g.unlists },
+        groupAction("save", { id: g.id, name: g.name, members: namedOf(g), match: g.match || [], routing: "manual", pick: id, affinity: g.affinity || "", ruleScope: g.ruleScope || "", sink: !!g.sink, firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, unlists: !!g.unlists },
           t("{name}: every request to {model}", { name: g.name, model: memberName(id) }));
       };
       box.append(b);
@@ -5155,6 +5162,11 @@ function routingPage(part) {
     aw.append(segs(AFF_OPTS.map(([id, n]) => [id, t(n)]), d.affinity, (v) => { d.affinity = v; aHint.textContent = t(AFF_HINT[v] || AFF_HINT[""]); }), aHint);
     ed.append(el("label", "", t("Stays")), aw);
 
+    const scopeWrap = el("div"), scopeHint = el("div", "hint");
+    scopeHint.textContent = t("Every request reclassifies the task and recent tool results, without a classification cache. Add intent rules to choose models. Child groups use their own setting; manual routing keeps its pick.");
+    scopeWrap.append(segs([["", t("Per turn")], ["request", t("Per-request decision")]], d.ruleScope || "", (v) => { d.ruleScope = v; drawClassifier(); }), scopeHint);
+    ed.append(el("label", "", t("Rule evaluation")), scopeWrap);
+
     // rules: which member a turn goes to first, by what the request shows.
     // A rule reads as one line, a sentence: the conditions it has, then →
     // and the model. A condition that isn't set isn't drawn at all; the
@@ -5613,7 +5625,9 @@ function routingPage(part) {
       // how it is asked goes under the ⓘ beside it: a paragraph under the
       // pick was most of the editor's words
       const how = [...(sg ? [t("A routing group classifies as any request to it goes: if its first model fails, the next is asked.")] : []),
-        t(isJev(d.classifier) && !intents
+        t(d.ruleScope === "request"
+          ? "Every request reclassifies the task and recent tool results, without a classification cache. Add intent rules to choose models. Child groups use their own setting; manual routing keeps its pick."
+          : isJev(d.classifier) && !intents
           ? "Jev is asked once as each turn begins, with the message and what it said of the turn before. Its calls show in the usage as magpie’s own."
           : isJev(d.classifier)
           ? "As a turn begins, Jev is asked once which of the intents the message is, and how hard the turn is when it picks the effort. An intent it isn't sure of matches no rule. Its calls show in the usage as magpie’s own."
@@ -5631,7 +5645,9 @@ function routingPage(part) {
       const subWarn = classifierSub(m, sg);
       if (subWarn) {
         const two = auto && intents && !isJev(d.classifier);
-        cls.append(el("div", "hint rt-cls-sub", t(two
+        cls.append(el("div", "hint rt-cls-sub", t(d.ruleScope === "request"
+          ? "Every request spends classifier allowance for {name}; intent and reasoning may require separate calls."
+          : two
           ? "Every turn starts with two requests to {name}, a subscription: they count against its allowance as the agent's own do. A free model or one on an API key leaves the subscription to the agents."
           : "Every turn starts with a request to {name}, a subscription: it counts against its allowance as the agent's own do. A free model or one on an API key leaves the subscription to the agents.", { name: subWarn })));
       }
@@ -5746,7 +5762,7 @@ function routingPage(part) {
       if (own && !d.levels.length) return status(t("Pick a level to offer, or leave them to its models"), "warn");
       saveBtn.classList.add("busy");
       // refused, Add can be pressed again (busy, it takes no clicks)
-      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: namedOf(d), match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: !!d.sink && sinkable(d.routing), firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
+      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: namedOf(d), match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, ruleScope: d.ruleScope || "", sink: !!d.sink && sinkable(d.routing), firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
         .then(() => saveBtn.classList.remove("busy"));
     };
     // what goes wrong is said where it is seen, never a click that does nothing
