@@ -759,8 +759,12 @@ func AdaptiveThinking(model string) bool { return adaptiveOnly(model) }
 // effortInOutputConfig is a model that takes how hard it thinks from
 // output_config.effort, beside thinking turned on, as ZCode asks it: Z.ai's
 // GLM-5.2 and GLM-5.3 on their Anthropic endpoints. A budget alone leaves
-// them at their own default.
-var effortInOutputConfig = regexp.MustCompile(`(?i)glm-5\.[23](?:$|[-.:/\[])`)
+// them at their own default. MiniMax's MiniMax-M3.1-Flash and its
+// -Preview, which think at low…max (MiniMax Code's catalog: forced_on),
+// are asked the same way as MiniMax Code asks them: a budget alone gave
+// medium to max one budget under an 8192 cap, so the level was lost
+// (shin4 on plugins#316).
+var effortInOutputConfig = regexp.MustCompile(`(?i)glm-5\.[23](?:$|[-.:/\[])|minimax-m3\.1-flash(?:$|[-.:/\[])`)
 
 // withOutputEffort is body asking, in output_config.effort, for the level
 // of levels nearest the reasoning it asks for; body when it asks for none.
