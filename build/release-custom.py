@@ -62,6 +62,15 @@ def output(key, value):
         handle.write(f"{key}={value}\n")
 
 
+def superseded(message):
+    print(f"::notice title=Build superseded::{message}")
+    output("published", "false")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as handle:
+            handle.write(f"### Build superseded\n\n{message}\n\nNo update was published by this run.\n")
+
+
 def prepare(state):
     # A runner may be queued past the caller's window check. Do not start
     # an automatic upstream query overnight, even after a scheduling delay.
@@ -73,6 +82,11 @@ def prepare(state):
     if run("git", "status", "--porcelain"):
         raise RuntimeError("Checkout must be clean before integration")
     base = run("git", "rev-parse", "HEAD")
+    current = api(f"repos/{REPO}/git/ref/heads/{BRANCH}")["object"]["sha"]
+    if current != base:
+        output("build", "false")
+        superseded(f"Checkout {base} was replaced by {current}; the newer run will handle it.")
+        return
     release = api("repos/yetone/magpie-releases/releases/latest")
     upstream = release["tag_name"]
     if release["draft"] or release["prerelease"] or not re.fullmatch(r"v\d+\.\d+\.\d+", upstream):
@@ -159,8 +173,16 @@ def publish(state, directory):
         raise RuntimeError("Checked source changed before publication")
     current = api(f"repos/{REPO}/git/ref/heads/{BRANCH}")["object"]["sha"]
     if current != info["base"] or channel_head() != info["channelHead"]:
-        raise RuntimeError("Maintenance branch or update channel advanced; start a new run")
-    run("git", "push", "origin", f"HEAD:refs/heads/{BRANCH}", capture=False)
+        superseded("Maintenance branch or update channel advanced during checks; the newer run will handle it.")
+        return
+    try:
+        run("git", "push", "origin", f"HEAD:refs/heads/{BRANCH}", capture=False)
+    except RuntimeError:
+        current = api(f"repos/{REPO}/git/ref/heads/{BRANCH}")["object"]["sha"]
+        if current != info["base"]:
+            superseded("Maintenance branch advanced before the candidate push; the newer run will handle it.")
+            return
+        raise
     run("gh", "release", "create", info["tag"], "-R", REPO, "--target", info["sourceCommit"],
         "--draft", "--title", f'Magpie 每请求意图路由 {info["version"]}',
         "--notes-file", str(directory / "release-notes.md"), capture=False)
@@ -175,6 +197,10 @@ def publish(state, directory):
             digest = hashlib.file_digest(handle, "sha256").hexdigest()
         if digest != manifest["assets"][EXE]["sha256"]:
             raise RuntimeError("Uploaded executable checksum mismatch; feed not changed")
+    current = api(f"repos/{REPO}/git/ref/heads/{BRANCH}")["object"]["sha"]
+    if current != info["sourceCommit"] or channel_head() != info["channelHead"]:
+        superseded("Source or update channel advanced during upload; the draft is kept for diagnosis.")
+        return
     run("gh", "release", "edit", info["tag"], "-R", REPO,
         "--draft=false", "--prerelease=false", "--latest=true", capture=False)
     previous = channel_file("notes.json", info["channelHead"])
@@ -201,6 +227,7 @@ def publish(state, directory):
             "-f", f'sha={commit["sha"]}', "-F", "force=false", capture=False)
     else:
         api(f"repos/{REPO}/git/refs", dict(ref=f"refs/heads/{CHANNEL}", sha=commit["sha"]))
+    output("published", "true")
     print(f'Published {manifest["url"]}; channel commit {commit["sha"]}')
 
 

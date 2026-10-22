@@ -62,7 +62,7 @@ jobs:
           $env:NODE_PATH = "$env:RUNNER_TEMP/gui-checks/node_modules"
           & "$env:RUNNER_TEMP/gui-checks/node_modules/.bin/playwright.cmd" install chromium webkit
           if ($LASTEXITCODE) { throw 'Browser installation failed' }
-          node --test internal/gui/tests/i18n-keys.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/update-restart.test.cjs internal/gui/tests/update-hide.test.cjs
+          node --test --test-concurrency=1 internal/gui/tests/i18n-keys.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/update-restart.test.cjs internal/gui/tests/update-hide.test.cjs
           if ($LASTEXITCODE) { throw 'Existing GUI updater checks failed' }
       - name: Build Windows x64 fork
         if: steps.integrate.outputs.build == 'true'
