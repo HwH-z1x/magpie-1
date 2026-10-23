@@ -5,6 +5,7 @@
 package usageapi
 
 import (
+	"cmp"
 	"net/url"
 	"os"
 	"slices"
@@ -94,11 +95,13 @@ func stateOf(s usage.Summary) Usage {
 		out.Models = append(out.Models, ug)
 	}
 	// each subscription account's share, by the account that answered
-	// (#557); Name "" is the calls whose record names none, the page
+	// (#557), named as the user named it now (provider.AccountShownOf,
+	// plugins#310): the record keeps the vendor's name, which the user's
+	// is kept by; Name "" is the calls whose record names none, the page
 	// saying "account not recorded"
 	for _, g := range s.Accounts {
 		p := which(g.Provider)
-		ug := Group{Group: g, Name: g.Account, Sub: p.Name, Icon: p.Icon}
+		ug := Group{Group: g, Name: provider.AccountShownOf(g.Provider, g.Account), Sub: p.Name, Icon: p.Icon}
 		out.Accounts = append(out.Accounts, ug)
 	}
 	out.CallerKeys = callerGroups(s)
@@ -236,9 +239,12 @@ type Share struct {
 }
 
 // Account is a subscription account the Account filter offers: its
-// name, and the providers it answered for, by name.
+// name, as the record keeps it and the filter asks by, the name the user
+// gave it in magpie when there is one (plugins#310), and the providers it
+// answered for, by name.
 type Account struct {
 	ID        string   `json:"id"`
+	Name      string   `json:"name,omitempty"`
 	Providers []string `json:"providers"`
 }
 
@@ -321,14 +327,17 @@ func LedgerPage(p usage.Period, f usage.Filter, offset, limit int) Ledger {
 	at := map[string]int{}
 	for _, g := range l.Accounts {
 		name := which(g.Provider).Name
+		own := provider.AccountNameOf(g.Provider, g.Account)
 		if i, ok := at[g.Account]; ok {
-			if a := &out.Accounts[i]; !slices.Contains(a.Providers, name) {
+			a := &out.Accounts[i]
+			if !slices.Contains(a.Providers, name) {
 				a.Providers = append(a.Providers, name)
 			}
+			a.Name = cmp.Or(a.Name, own)
 			continue
 		}
 		at[g.Account] = len(out.Accounts)
-		out.Accounts = append(out.Accounts, Account{ID: g.Account, Providers: []string{name}})
+		out.Accounts = append(out.Accounts, Account{ID: g.Account, Name: own, Providers: []string{name}})
 	}
 	// what each is of: the rows of the filter, or, for the dimension the
 	// filter has picked, of the rows without that pick

@@ -766,6 +766,30 @@ func AdaptiveThinking(model string) bool { return adaptiveOnly(model) }
 // (shin4 on plugins#316).
 var effortInOutputConfig = regexp.MustCompile(`(?i)glm-5\.[23](?:$|[-.:/\[])|minimax-m3\.1-flash(?:$|[-.:/\[])`)
 
+// deepseekHost is DeepSeek's own API, whose Anthropic endpoint
+// (api.deepseek.com/anthropic) takes the effort in output_config.
+const deepseekHost = "api.deepseek.com"
+
+// deepseekEfforts are the levels DeepSeek's models think at: its thinking
+// guide maps minimal to low, medium and xhigh to high, and ultra to max.
+// A budget a client sent is fitted to them when the model's own list is
+// unknown, so 32000 (max, as budgetOf gives it) asks max, not xhigh,
+// which DeepSeek would read as high.
+var deepseekEfforts = []string{"low", "high", "max"}
+
+// outputEffortAt is effortInOutputConfig for a model at host: those
+// models anywhere, and every model on DeepSeek's own endpoint. DeepSeek's
+// Anthropic API docs (api-docs.deepseek.com/guides/anthropic_api, read
+// 2026-10-23) list thinking as "Supported (budget_tokens is ignored)" and
+// output_config as "Only effort is supported", and its thinking guide
+// (guides/thinking_mode) names output_config.effort as the Anthropic
+// format's effort control: a budget alone left DSH's low and max at
+// DeepSeek's default, high (#3298). Another host serving a DeepSeek model
+// is not covered by those docs and goes as it did.
+func outputEffortAt(host, model string) bool {
+	return host == deepseekHost || effortInOutputConfig.MatchString(model)
+}
+
 // withOutputEffort is body asking, in output_config.effort, for the level
 // of levels nearest the reasoning it asks for; body when it asks for none.
 func withOutputEffort(body []byte, levels []string) []byte {
@@ -813,13 +837,14 @@ const interruptedTool = "[The result of this tool call is unavailable: the turn 
 
 // buildAnthropic renders a request for an Anthropic-style upstream.
 func buildAnthropic(r *Request, model string) []byte {
-	return anthropicBody(r, model, false)
+	return anthropicBody(r, model, "", false)
 }
 
 // anthropicBody is buildAnthropic; with replay, for an upstream that wants
 // a turn's thinking back (anthropicReplaysThinking), thinking with no
-// signature goes as its text instead of being left out.
-func anthropicBody(r *Request, model string, replay bool) []byte {
+// signature goes as its text instead of being left out. host is the
+// upstream's (outputEffortAt).
+func anthropicBody(r *Request, model, host string, replay bool) []byte {
 	if r.Format != nil && r.Format.schema() == nil {
 		// output_config.format takes a schema only: any JSON object is
 		// asked for in words
@@ -945,7 +970,7 @@ func anthropicBody(r *Request, model string, replay bool) []byte {
 			maxTokens = budget + 4096
 		}
 		out["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budget}
-		if r.Effort != "" && effortInOutputConfig.MatchString(model) {
+		if r.Effort != "" && outputEffortAt(host, model) {
 			out["output_config"] = map[string]any{"effort": r.Effort}
 		}
 	} else if r.Temp != nil {
@@ -1259,7 +1284,8 @@ func decodeAnthropic(data string, emit func(Event)) error {
 		}
 		emit(Event{Kind: KUsage, Usage: ev.Usage.usage(), SafeguardResults: review, StopDetails: stopDetails(ev.Delta.StopDetails)})
 	case "error":
-		emit(Event{Kind: KError, Text: cmp.Or(ev.Error.Message, ev.Error.Type, streamErrorText(data)), Code: refusedCode(data)})
+		code, status, said := filterRefused(data)
+		emit(Event{Kind: KError, Text: cmp.Or(ev.Error.Message, ev.Error.Type, streamErrorText(data)), Code: code, Status: status, Said: said})
 	}
 	return nil
 }

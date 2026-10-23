@@ -185,12 +185,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // row is wheeled into view, as a reader would, before its click.
         assert.equal(await view(page), before, "no alert click moved the page");
         const cny = page.locator("#currencySegs .opt", { hasText: w.cny });
-        for (let i = 0; i < 40; i++) {
-          const box = await cny.boundingBox();
-          if (box && box.y >= 60) break;
-          await page.mouse.wheel(0, -60);
-          await page.waitForTimeout(30);
-        }
+        // wholly in sight and under nothing, or the click's own scroll to it
+        // reads as the page moving (10-22, taller rows)
+        await reach(page, cny);
         const atCurrency = await view(page);
         await cny.click();
         const c = await posted(5);

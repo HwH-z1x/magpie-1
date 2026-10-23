@@ -3,7 +3,9 @@ package davsync
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,13 +76,15 @@ func newGitHub(c Config) (*github, error) {
 		branch: branch, token: c.Password, client: &client}, nil
 }
 
-func (g *github) send(ctx context.Context, method, apiPath string, body []byte, accept string, ref bool) (*http.Response, error) {
+// send calls the repository's API; a non-empty ref reads at that branch or
+// commit.
+func (g *github) send(ctx context.Context, method, apiPath string, body []byte, accept string, ref string) (*http.Response, error) {
 	u := &url.URL{Scheme: "https", Host: "api.github.com", Path: "/repos/" + g.repo}
 	if apiPath != "" {
 		u.Path += "/" + apiPath
 	}
-	if ref {
-		q := url.Values{"ref": {g.branch}}
+	if ref != "" {
+		q := url.Values{"ref": {ref}}
 		u.RawQuery = q.Encode()
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
@@ -129,7 +133,7 @@ func (g *github) prepare(ctx context.Context) error {
 	if g.ready {
 		return nil
 	}
-	res, err := g.send(ctx, http.MethodGet, "", nil, "application/vnd.github+json", false)
+	res, err := g.send(ctx, http.MethodGet, "", nil, "application/vnd.github+json", "")
 	if err != nil {
 		return err
 	}
@@ -157,7 +161,7 @@ func (g *github) prepare(ctx context.Context) error {
 	if g.branch == "" {
 		return errors.New("the GitHub repository has no default branch: create an initial commit first")
 	}
-	res, err = g.send(ctx, http.MethodGet, "git/ref/heads/"+g.branch, nil, "application/vnd.github+json", false)
+	res, err = g.send(ctx, http.MethodGet, "git/ref/heads/"+g.branch, nil, "application/vnd.github+json", "")
 	if err != nil {
 		return err
 	}
@@ -200,7 +204,14 @@ func (g *github) content(ctx context.Context, name string) (*githubContent, erro
 	if err := g.prepare(ctx); err != nil {
 		return nil, err
 	}
-	res, err := g.send(ctx, http.MethodGet, "contents/"+g.at(name), nil, "application/vnd.github.object+json", true)
+	return g.contentAt(ctx, name, g.branch)
+}
+
+// contentAt reads a file's metadata at a branch or commit. The object media
+// type answers for files up to 100 MB; over 1 MB its content is empty and
+// bytes downloads the blob instead.
+func (g *github) contentAt(ctx context.Context, name, ref string) (*githubContent, error) {
+	res, err := g.send(ctx, http.MethodGet, "contents/"+g.at(name), nil, "application/vnd.github.object+json", ref)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +249,7 @@ func (g *github) bytes(ctx context.Context, c *githubContent) ([]byte, error) {
 	}
 	// The blob SHA pins the download to the metadata read above, even if
 	// another computer commits a new backup while the download is starting.
-	res, err := g.send(ctx, http.MethodGet, "git/blobs/"+c.SHA, nil, "application/vnd.github.raw+json", false)
+	res, err := g.send(ctx, http.MethodGet, "git/blobs/"+c.SHA, nil, "application/vnd.github.raw+json", "")
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +277,21 @@ func (g *github) get(ctx context.Context, have version) ([]byte, version, error)
 	return b, v, err
 }
 
+// errTooLarge is the Contents API refusing a file it won't process, which
+// it does well under the 100 MB a blob can hold (a 19 MB backup passed and a
+// larger one didn't, on Discord).
+var errTooLarge = errors.New("GitHub's Contents API refused the file as too large")
+
+// errBehind is a ref update that is no longer a fast-forward: another commit
+// reached the branch after its head was read.
+var errBehind = errors.New("the GitHub branch moved meanwhile")
+
+// commit writes or removes one file in one commit. A repository with
+// commits goes through the Git Data API (blob, tree, commit, ref), which
+// takes files up to 100 MB, where the Contents API refuses large ones (HTTP
+// 422 "the file is too large to be processed"). An empty repository has no
+// branch to build on, so its first write goes through the Contents API,
+// which creates the default branch.
 func (g *github) commit(ctx context.Context, name string, data []byte, sha string, remove bool) (version, error) {
 	if len(data) > githubMaxFile {
 		return version{}, errors.New("the GitHub sync file exceeds 64 MiB")
@@ -273,6 +299,193 @@ func (g *github) commit(ctx context.Context, name string, data []byte, sha strin
 	if err := g.prepare(ctx); err != nil {
 		return version{}, err
 	}
+	if g.empty {
+		v, err := g.contents(ctx, name, data, sha, remove)
+		if !errors.Is(err, errTooLarge) {
+			return v, err
+		}
+		// Too large for the Contents API: give the repository a first
+		// commit of its own, then build the file's commit on it.
+		if err := g.initialize(ctx); err != nil {
+			return version{}, err
+		}
+	}
+	blob := ""
+	for try := 0; ; try++ {
+		v, err := g.gitCommit(ctx, name, data, sha, remove, &blob)
+		if !errors.Is(err, errBehind) {
+			return v, err
+		}
+		// A commit that touched other files (another computer's usage)
+		// is built on again; gitCommit returns errChanged if it touched
+		// this file.
+		if try == 3 {
+			return version{}, errChanged
+		}
+	}
+}
+
+// githubJSON sends in as JSON and decodes a 2xx reply into out. Any other
+// status is returned as the response, its body readable, for the caller to
+// judge.
+func (g *github) githubJSON(ctx context.Context, method, apiPath string, in, out any) (*http.Response, error) {
+	var body []byte
+	if in != nil {
+		var err error
+		if body, err = json.Marshal(in); err != nil {
+			return nil, err
+		}
+	}
+	res, err := g.send(ctx, method, apiPath, body, "application/vnd.github+json", "")
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode < 200 || res.StatusCode > 299 {
+		b, err := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+		res.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		res.Body = io.NopCloser(bytes.NewReader(b))
+		return res, nil
+	}
+	defer res.Body.Close()
+	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(out); err != nil {
+		return nil, fmt.Errorf("reading GitHub's reply to %s %s: %w", method, apiPath, err)
+	}
+	return nil, nil
+}
+
+// gitCommit builds one commit on the branch's head that writes data (or
+// removes the file) and moves the branch to it. The file must still be at
+// sha in that head, so another computer's backup is never written over;
+// the ref update without force refuses a head that moved after it was read.
+// blob carries the uploaded blob's SHA across retries.
+func (g *github) gitCommit(ctx context.Context, name string, data []byte, sha string, remove bool, blob *string) (version, error) {
+	var ref struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	if res, err := g.githubJSON(ctx, http.MethodGet, "git/ref/heads/"+g.branch, nil, &ref); err != nil {
+		return version{}, err
+	} else if res != nil {
+		return version{}, githubError(res)
+	}
+	head := ref.Object.SHA
+	if head == "" {
+		return version{}, errors.New("GitHub did not return the branch's head commit")
+	}
+	c, err := g.contentAt(ctx, name, head)
+	if err != nil {
+		return version{}, err
+	}
+	if c != nil && c.SHA != sha || c == nil && sha != "" {
+		return version{}, errChanged
+	}
+	if !remove && *blob == "" {
+		var out struct {
+			SHA string `json:"sha"`
+		}
+		in := map[string]string{"content": base64.StdEncoding.EncodeToString(data), "encoding": "base64"}
+		if res, err := g.githubJSON(ctx, http.MethodPost, "git/blobs", in, &out); err != nil {
+			return version{}, err
+		} else if res != nil {
+			return version{}, githubError(res)
+		}
+		if out.SHA != gitBlobSHA(data) {
+			return version{}, errors.New("GitHub stored a different blob than the one sent")
+		}
+		*blob = out.SHA
+	}
+	var commit struct {
+		Tree struct {
+			SHA string `json:"sha"`
+		} `json:"tree"`
+	}
+	if res, err := g.githubJSON(ctx, http.MethodGet, "git/commits/"+head, nil, &commit); err != nil {
+		return version{}, err
+	} else if res != nil {
+		return version{}, githubError(res)
+	}
+	if commit.Tree.SHA == "" {
+		return version{}, errors.New("GitHub did not return the head commit's tree")
+	}
+	// A null sha removes the path from the tree.
+	type entry struct {
+		Path string  `json:"path"`
+		Mode string  `json:"mode"`
+		Type string  `json:"type"`
+		SHA  *string `json:"sha"`
+	}
+	e := entry{Path: g.at(name), Mode: "100644", Type: "blob"}
+	message := "magpie: remove " + name
+	if !remove {
+		e.SHA, message = blob, "magpie: sync "+name
+	}
+	var tree, made struct {
+		SHA string `json:"sha"`
+	}
+	if res, err := g.githubJSON(ctx, http.MethodPost, "git/trees", map[string]any{"base_tree": commit.Tree.SHA, "tree": []entry{e}}, &tree); err != nil {
+		return version{}, err
+	} else if res != nil {
+		return version{}, githubError(res)
+	}
+	if res, err := g.githubJSON(ctx, http.MethodPost, "git/commits", map[string]any{"message": message, "tree": tree.SHA, "parents": []string{head}}, &made); err != nil {
+		return version{}, err
+	} else if res != nil {
+		return version{}, githubError(res)
+	}
+	if made.SHA == "" {
+		return version{}, errors.New("GitHub did not return the new commit")
+	}
+	var moved json.RawMessage
+	res, err := g.githubJSON(ctx, http.MethodPatch, "git/refs/heads/"+g.branch, map[string]any{"sha": made.SHA, "force": false}, &moved)
+	if err != nil {
+		return version{}, err
+	}
+	if res != nil {
+		if res.StatusCode == http.StatusUnprocessableEntity {
+			b, _ := io.ReadAll(res.Body)
+			if strings.Contains(strings.ToLower(string(b)), "fast forward") {
+				return version{}, errBehind
+			}
+			res.Body = io.NopCloser(bytes.NewReader(b))
+		}
+		return version{}, githubError(res)
+	}
+	g.empty = false
+	if remove {
+		return version{}, nil
+	}
+	return version{ETag: *blob}, nil
+}
+
+// gitBlobSHA is the SHA git names a blob holding b by: the version GitHub
+// reports for the file.
+func gitBlobSHA(b []byte) string {
+	h := sha1.New()
+	fmt.Fprintf(h, "blob %d\x00", len(b))
+	h.Write(b)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// initialize gives an empty repository its first commit, a short note in
+// magpie's folder, so a backup too large for the Contents API can be
+// committed on top of it through the Git Data API. Another computer that
+// initialized it first is just as good.
+func (g *github) initialize(ctx context.Context) error {
+	note := []byte("This folder holds magpie's encrypted sync files.\n")
+	if _, err := g.contents(ctx, "README.md", note, "", false); err != nil && !errors.Is(err, errChanged) {
+		return err
+	}
+	g.empty = false
+	return nil
+}
+
+// contents writes through the Contents API, which only an empty repository's
+// first write uses.
+func (g *github) contents(ctx context.Context, name string, data []byte, sha string, remove bool) (version, error) {
 	in := map[string]string{"message": "magpie: sync " + name, "content": base64.StdEncoding.EncodeToString(data)}
 	// Omitting branch lets the first backup initialize an empty repository.
 	if !g.empty {
@@ -291,7 +504,7 @@ func (g *github) commit(ctx context.Context, name string, data []byte, sha strin
 	if err != nil {
 		return version{}, err
 	}
-	res, err := g.send(ctx, method, "contents/"+g.at(name), body, "application/vnd.github+json", false)
+	res, err := g.send(ctx, method, "contents/"+g.at(name), body, "application/vnd.github+json", "")
 	if err != nil {
 		return version{}, err
 	}
@@ -299,11 +512,18 @@ func (g *github) commit(ctx context.Context, name string, data []byte, sha strin
 	if res.StatusCode == http.StatusConflict {
 		return version{}, errChanged
 	}
+	if res.StatusCode == http.StatusRequestEntityTooLarge {
+		return version{}, errTooLarge
+	}
 	if res.StatusCode == http.StatusUnprocessableEntity {
-		// A first write raced another computer creating the same file.
 		body, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+		// A first write raced another computer creating the same file.
 		if strings.Contains(string(body), `\"sha\" wasn't supplied`) {
 			return version{}, errChanged
+		}
+		var e struct{ Message string }
+		if json.Unmarshal(body, &e) == nil && strings.Contains(strings.ToLower(e.Message), "too large") {
+			return version{}, errTooLarge
 		}
 		res.Body = io.NopCloser(bytes.NewReader(body))
 	}
@@ -332,7 +552,7 @@ func (g *github) list(ctx context.Context) (map[string]string, error) {
 	if err := g.prepare(ctx); err != nil {
 		return nil, err
 	}
-	res, err := g.send(ctx, http.MethodGet, "contents/"+g.at(usageFolder), nil, "application/vnd.github+json", true)
+	res, err := g.send(ctx, http.MethodGet, "contents/"+g.at(usageFolder), nil, "application/vnd.github+json", g.branch)
 	if err != nil {
 		return nil, err
 	}

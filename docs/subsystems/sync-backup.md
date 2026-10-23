@@ -12,8 +12,8 @@ clone a working tree or synchronize arbitrary files.
   versions, notices and undo file in `sync-state.json`. These files live beside
   magpie's settings. Secrets are local, never in the status response.
 - The [`remote`](../../internal/davsync/dav.go) interface reads a version and
-  conditionally replaces it. WebDAV and S3 use ETags; GitHub uses the blob SHA
-  required by its Contents API. [`github.go`](../../internal/davsync/github.go)
+  conditionally replaces it. WebDAV and S3 use ETags; GitHub uses the file's
+  blob SHA. [`github.go`](../../internal/davsync/github.go)
   interprets `github://owner/repo[/prefix]`, with `Config.Branch` selecting a
   branch or using the repository's default.
 - [`backup.go`](../../internal/backup/backup.go) owns bundle contents and
@@ -97,12 +97,23 @@ repository can keep the token. The branch is part of the sync state key.
   repository read doesn't say `"private": true`, since a public history hands
   every sealed version to anyone to guess the passphrase against
   (`TestGitHubPublicRepositoryRefused`). In an empty repository, the first encrypted
-  backup initializes its default branch through the Contents API. A selected
+  backup initializes its default branch through the Contents API. When that
+  API refuses it as too large, a short `README.md` in magpie's folder makes
+  the first commit and the backup follows as the second. A selected
   branch other than the default must already exist. The token needs repository
   Contents read and write.
 - Backups are `<prefix>/magpie/magpie.magpie-backup`; optional usage files
-  live beside them under `usage/`. Changes create commits, and unchanged
-  setup does not create another backup commit.
+  live beside them under `usage/`. Each write or removal is one commit, and
+  unchanged setup does not create another backup commit.
+- A repository with commits is written through the Git Data API: a blob
+  (up to 100 MB), a tree on the head commit's tree, a commit with the head
+  as its parent, and a ref update without force. The Contents API's PUT
+  refuses files well under that with 422 "the file is too large to be
+  processed" (a 102-skill backup past ~19 MB, Discord). The file must still
+  be at the version sync read, checked at the head commit, before the
+  commit is built. A ref update that is not a fast-forward is built again on
+  the new head, up to three times; if the new head changed the file it is
+  `errChanged`. A branch deleted meanwhile is an error, never created.
 - Tokens are separate from the library's GitHub token, sent only to
   `https://api.github.com`, and must differ from the encryption passphrase.
   Repository history retains older encrypted versions.
@@ -115,7 +126,8 @@ repository can keep the token. The branch is part of the sync state key.
 - Large files are downloaded by blob SHA, preserving the version that was
   read. Sync files are limited to 64 MiB. Usage listing fails at the Contents
   API's 1,000-file limit rather than treating a truncated list as complete.
-- A stale SHA or a racing initial creation returns `errChanged`. Other 422
+- A stale SHA, a backup another commit changed, or a racing initial
+  creation returns `errChanged`. Other 422
   responses stay actionable errors. Authentication, permission and branch
   failures remain distinct from missing files. Rate limits use sync backoff.
 - Request archival remains an S3-only feature; its objects are separate from
@@ -132,7 +144,11 @@ node --test internal/gui/tests/github-sync.test.cjs internal/gui/tests/s3-sync.t
 `TestGitHubEmptyRepository` covers the first encrypted backup initializing an
 empty repository and an unchanged second sync. `TestGitHubEmptyRepositoryFailures`
 covers missing branches, unrelated ref conflicts and another computer winning
-the initial write. `TestGitHubNotBackup` covers backend-specific recovery
+the initial write. `TestGitHubLargeBackup` writes a 21 MB backup past a fixture whose Contents
+API refuses it, as one commit, and reads it back by blob SHA.
+`TestGitHubBranchMovedMeanwhile` covers a head that moved before the ref
+update, and `TestGitHubEmptyRepositoryLargeBackup` a large first backup.
+`TestGitHubNotBackup` covers backend-specific recovery
 advice when the repository holds an empty or foreign file.
 
 Go tests use `testenv` homes and HTTP fixtures. Browser tests use isolated
