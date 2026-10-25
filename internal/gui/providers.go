@@ -2332,8 +2332,14 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		// and System Settings' Login Items, where Open at login is allowed
 		// again: that one pane, not System Settings' scheme at large
 		if strings.HasPrefix(in.URL, "https://") || strings.HasPrefix(in.URL, "http://") || strings.HasPrefix(in.URL, agent.CindyScheme) || strings.HasPrefix(in.URL, agent.LodyScheme) || in.URL == autostart.LoginItemsURL {
+			open := w.OpenURL
+			if strings.HasPrefix(in.URL, agent.LodyScheme) {
+				// Lody on Linux is run with the link, which xdg-open
+				// turned away (agent.OpenLody)
+				open = func(u string) error { return agent.OpenLody(u, w.OpenURL) }
+			}
 			// Open again on a sign-in says why it didn't open (#2043)
-			if err := w.OpenURL(in.URL); err != nil {
+			if err := open(in.URL); err != nil {
 				fail(rw, err)
 				return
 			}
