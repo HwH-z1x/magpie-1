@@ -23931,7 +23931,11 @@ function fitTop() {
   top.classList.add("crowded");
   if (!fits()) top.classList.add("packed");
 }
-const topFit = new ResizeObserver(fitTop);
+// Header classes resize the observed boxes; write them outside observer delivery.
+let topFitFrame = 0;
+const topFit = new ResizeObserver(() => {
+  if (!topFitFrame) topFitFrame = requestAnimationFrame(() => { topFitFrame = 0; fitTop(); });
+});
 for (const e of [".top", ".brand", ".actions"]) topFit.observe($(e));
 document.fonts?.ready.then(fitTop);
 // a font picked later (Settings' Font) can still be loading when it's applied
