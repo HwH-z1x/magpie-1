@@ -91,7 +91,7 @@ def prepare(state):
     upstream = release["tag_name"]
     if release["draft"] or release["prerelease"] or not re.fullmatch(r"v\d+\.\d+\.\d+", upstream):
         raise RuntimeError("Upstream is not a stable release")
-    run("git", "fetch", "https://github.com/yetone/magpie.git", f"refs/tags/{upstream}")
+    run("git", "fetch", "--no-tags", "https://github.com/yetone/magpie.git", f"refs/tags/{upstream}")
     upstream_sha = run("git", "rev-parse", "FETCH_HEAD^{commit}")
     head = channel_head()
     previous = channel_file("latest.json", head)
@@ -115,9 +115,33 @@ def prepare(state):
     run("git", "config", "user.name", "magpie-request-intent[bot]")
     run("git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
     run("git", "config", "merge.fork-readme.driver", "true")
-    # A conflict is intentionally fatal. The candidate and logs remain in
-    # the failed run; the maintenance branch and current feed are untouched.
-    run("git", "merge", "--no-edit", upstream_sha, capture=False)
+    # Save integration evidence before merging: conflicts happen before a
+    # candidate exists, but must still leave an actionable artifact.
+    state.parent.mkdir(parents=True, exist_ok=True)
+    write_json(state, dict(base=base, upstreamVersion=upstream,
+                          upstreamCommit=upstream_sha, version=version,
+                          tag=tag, channelHead=head, stage="integrating"))
+    merged = subprocess.run(["git", "merge", "--no-edit", upstream_sha],
+                            text=True, encoding="utf-8", capture_output=True)
+    print(merged.stdout)
+    if merged.stderr:
+        print(merged.stderr)
+    if merged.returncode:
+        conflicts = run("git", "diff", "--name-only", "--diff-filter=U").splitlines()
+        report = state.with_suffix(".integration.txt")
+        report.write_text(f"Base: {base}\nUpstream: {upstream} ({upstream_sha})\n\n"
+                          + merged.stdout + merged.stderr + "\nConflicts:\n"
+                          + "\n".join(conflicts) + "\n", encoding="utf-8")
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a", encoding="utf-8") as handle:
+                handle.write(f"### Upstream integration failed: {upstream}\n\n"
+                             "The current release and update feed are unchanged. "
+                             "Resolve the source conflicts on main before rerunning; "
+                             "rerunning unchanged source cannot fix them.\n\n"
+                             + "\n".join(f"- `{name}`" for name in conflicts)
+                             + "\n\nSee the integration artifact for the Git output.\n")
+        raise RuntimeError("Upstream integration failed; see the step summary and integration artifact")
     candidate = run("git", "rev-parse", "HEAD")
     if not SHA.fullmatch(candidate) or not SHA.fullmatch(upstream_sha):
         raise RuntimeError("Invalid source commit")

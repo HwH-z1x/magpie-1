@@ -18,7 +18,13 @@ const assets = path.resolve(__dirname, "../assets");
 
 const partner = (id, name, extra = {}) => ({ id, name, icon: "generic", kind: "partner", sponsored: true, chat: `https://api.${id}.example.com/v1`, ...extra });
 const partners = [
-  partner("acme", "Acme AI", { notes: { en: "Fast relay", zh: "快速中转", ja: "高速な中継" } }),
+  partner("acme", "Acme AI", { notes: { en: "Fast relay", zh: "快速中转", ja: "高速な中継" },
+    // its pages are /go links, named by the host they send the browser to
+    website: "https://usemagpie.ai/go/acme/site", siteHost: "www.acme.example",
+    regions: [
+      { id: "cn", name: "China", chat: "https://api.acme.example.com/v1", website: "https://usemagpie.ai/go/acme/site/cn", siteHost: "cn.acme.example" },
+      { id: "global", name: "Global", chat: "https://global.acme.example.com/v1", website: "https://usemagpie.ai/go/acme/site/global", siteHost: "global.acme.example" },
+    ] }),
   partner("zhonly", "China Only", { langs: ["zh"], notes: { en: "Mainland relay", zh: "国内中转" } }),
   partner("taken", "Taken", { added: true }),
 ];
@@ -111,6 +117,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await sheet.locator(".tile", { hasText: "Acme AI" }).click();
         await page.locator("#modal .editor .ehead .note").waitFor();
         assert.equal(await page.locator("#modal .editor .ehead .note").textContent(), w.note);
+        // and its site by the partner's own host, not usemagpie.ai's,
+        // following the region picked
+        const site = page.locator("#modal .editor .ehead .link.site");
+        assert.equal(await site.textContent(), "cn.acme.example ↗");
+        await page.locator("#modal .editor .segs.regions .opt").nth(1).click();
+        assert.equal(await site.textContent(), "global.acme.example ↗");
+        assert.equal(await site.getAttribute("data-url"), "https://usemagpie.ai/go/acme/site/global");
         assert.deepEqual(errors, []);
         await page.context().close();
       });
@@ -162,6 +175,42 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await add.click();
         await page.locator("#addSheet .tile").first().waitFor();
         assert.equal(await add.evaluate((b) => b.classList.contains("has-new")), false);
+        // each new partner's tile has its own dot, inside the tile, and one
+        // listed only in another language isn't there to have one
+        const tileDots = () => page.locator("#addSheet .tile").evaluateAll((ts) => ts.filter((x) => x.querySelector(".new-dot")).map((x) => {
+          const d = x.querySelector(".new-dot"), s = getComputedStyle(d), r = d.getBoundingClientRect(), o = x.getBoundingClientRect();
+          return { name: x.dataset.pick, w: s.width, h: s.height, bg: s.backgroundColor, inside: r.left >= o.left && r.right <= o.right && r.top >= o.top && r.bottom <= o.bottom, label: d.getAttribute("aria-label") };
+        }));
+        const want = lang === "en" ? ["Acme AI"] : ["Acme AI", "China Only"];
+        let dots = await tileDots();
+        assert.deepEqual(dots.map((d) => d.name), want);
+        for (const d of dots) {
+          assert.deepEqual([d.w, d.h, d.inside, d.label], ["6px", "6px", true, lang === "en" ? "New" : "新"]);
+          assert.notEqual(d.bg, "rgba(0, 0, 0, 0)");
+        }
+        // a dot scales in and rings once, then rests
+        await page.waitForFunction(() => !document.querySelector("#addSheet .new-dot.in"), null, { timeout: 8000 });
+        // the dots outlast the sheet showing them, closing and opening again
+        await page.keyboard.press("Escape");
+        await page.locator("#addSheet").waitFor({ state: "hidden" });
+        await add.click();
+        await page.locator("#addSheet .tile").first().waitFor();
+        assert.deepEqual((await tileDots()).map((d) => d.name), want);
+        // a dot drawn again doesn't scale in again
+        assert.equal(await page.locator("#addSheet .new-dot.in").count(), 0);
+        // opened, Acme's dot is spent; the others keep theirs, in the sheet
+        // it folds back into and in the sheet opened again
+        await page.locator('#addSheet .tile[data-pick="Acme AI"]').click();
+        await page.locator("#modal .editor").waitFor();
+        await page.keyboard.press("Escape");
+        await page.locator("#modal .editor").waitFor({ state: "detached" });
+        await page.locator('#addSheet .tile[data-pick="Acme AI"]').waitFor();
+        assert.deepEqual((await tileDots()).map((d) => d.name), want.slice(1));
+        await page.keyboard.press("Escape");
+        await page.locator("#addSheet").waitFor({ state: "hidden" });
+        await add.click();
+        await page.locator("#addSheet .tile").first().waitFor();
+        assert.deepEqual((await tileDots()).map((d) => d.name), want.slice(1));
         await page.keyboard.press("Escape");
         await page.locator("#addSheet").waitFor({ state: "hidden" });
         assert.equal(await add.evaluate((b) => b.classList.contains("has-new")), false);

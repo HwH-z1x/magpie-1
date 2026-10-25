@@ -92,6 +92,10 @@ type Hit struct {
 	URL   string `json:"url"`
 	// PageAge is how old the search said the page is, "" when it didn't
 	PageAge string `json:"page_age,omitempty"`
+	// Cited is what the search said of the page (a search API's snippet,
+	// the text a searcher's own citation quotes), which a citation of it
+	// quotes (citesOf); "" when it said nothing of it alone
+	Cited string `json:"cited_text,omitempty"`
 }
 
 // attachmentText is the fallback when a protocol cannot carry a Gemini file.
@@ -190,6 +194,12 @@ type Request struct {
 	// built); one that turns the field away is asked again without it
 	// (optionalFields)
 	OwnTier bool
+	// OwnEffort is set when Effort is magpie's own ask, not the client's:
+	// auto mode's classifier asked to reason least of a model whose levels
+	// aren't known (fitAutoModeClassifier). An upstream that turns it away
+	// is asked at low, or without it, as it would have been
+	// (ownEffortRefused)
+	OwnEffort bool
 	// CacheKey is the client's prompt_cache_key (Codex sends its thread's
 	// id), which OpenAI, and relays in front of it, route a conversation by
 	// to where its prompt is cached.
@@ -212,7 +222,8 @@ type Request struct {
 	// was sent, null and all, when the request is built again for a
 	// Responses upstream, whose answer to a value it doesn't take
 	// (invalid_access_program) is the client's to read; no other API takes
-	// it (magpie-releases#18).
+	// it (magpie-releases#18). Only OpenAI's upstreams are sent it
+	// (keepsAccessPrograms, #3172).
 	AccessPrograms json.RawMessage
 	// Metadata is an Anthropic client's metadata (Claude Code's user_id),
 	// which goes on as it was sent when the request is built again for an
@@ -355,6 +366,9 @@ type Usage struct {
 	// cacheCreationHasCounts describes the parsed update's own split.
 	// It is never accumulated from earlier usage.
 	cacheCreationHasCounts bool
+	// cacheUnknown: the reply said its vendor counts no cache tokens
+	// (a plugin's magpie_cache_unknown), so a CacheRead of 0 is not a miss
+	cacheUnknown bool
 
 	Reasoning int `json:"reasoning"`
 	// Served: the model the vendor's reply says answered, when it named
@@ -389,6 +403,13 @@ type Usage struct {
 
 // billed is what the request is billed for: its own count, and what it
 // counted of earlier ones (Deferred).
+// cacheNotCounted is whether the vendor counted no cache for this usage:
+// it said so (cacheUnknown) and no try of it reported a cache token. The
+// Routing page and the ledger leave such a prompt out of a hit rate (#3464).
+func (u Usage) cacheNotCounted() bool {
+	return u.cacheUnknown && u.CacheRead+u.CacheWrite == 0
+}
+
 func (u Usage) billed() Usage {
 	if d := u.Deferred; d != nil {
 		u.Input += d.Input
@@ -426,6 +447,7 @@ func (u *Usage) add(v Usage) {
 		u.CacheWrite1h = v.CacheWrite1h
 	}
 	u.cacheCreationReported = u.cacheCreationReported || v.cacheCreationReported
+	u.cacheUnknown = u.cacheUnknown || v.cacheUnknown
 	if v.Reasoning > 0 {
 		u.Reasoning = v.Reasoning
 	}

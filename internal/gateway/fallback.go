@@ -1011,7 +1011,40 @@ var restingUntil = struct {
 	sync.Mutex
 	m    map[string]time.Time
 	note map[string]Rest // why each rests
-}{m: map[string]time.Time{}, note: map[string]Rest{}}
+	// lifted is when each rest was lifted before its time — by hand
+	// (Unrest), or its windows renewed — by the key it rested by: the
+	// kept routes still say it rested, and the Routing page reads this
+	// (TraceState.Lifted) to stop showing a rest lifted since it was
+	// found, from whichever page lifted it (zoecats on Discord: Try now
+	// in the provider's editor left Routing at 429 until a restart)
+	lifted map[string]time.Time
+}{m: map[string]time.Time{}, note: map[string]Rest{}, lifted: map[string]time.Time{}}
+
+// liftedLocked notes that the rest by key was lifted now, with
+// restingUntil held. A lift older than any rest can be is let go.
+func liftedLocked(key string, now time.Time) {
+	for k, at := range restingUntil.lifted {
+		if now.Sub(at) > longestMonthly {
+			delete(restingUntil.lifted, k)
+		}
+	}
+	restingUntil.lifted[key] = now
+}
+
+// liftedRests is when each rest lifted before its time was lifted, by
+// the key it rested by.
+func liftedRests() map[string]time.Time {
+	restingUntil.Lock()
+	defer restingUntil.Unlock()
+	if len(restingUntil.lifted) == 0 {
+		return nil
+	}
+	out := make(map[string]time.Time, len(restingUntil.lifted))
+	for k, at := range restingUntil.lifted {
+		out[k] = at
+	}
+	return out
+}
 
 func (s *Server) resting(id string) bool {
 	_, ok := restOf(id)
@@ -3313,4 +3346,52 @@ func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, in
 		msg += "; its accounts are " + strings.Join(have, ", ")
 	}
 	return nil, pl, http.StatusNotFound, msg
+}
+
+// unservedTry says c's try failed as the vendor refusing the model as one
+// it doesn't serve the account or key (modelRefused, codeAssistModelMissing):
+// what restAfterMarked rests for that model alone.
+func unservedTry(c candidate, status int, body []byte) bool {
+	return failure(status, body) == failOther && (modelRefused(status, body) || codeAssistModelMissing(c.p, status, body))
+}
+
+// unlistedNext takes out of a plan's unlisted accounts (planned.unlisted,
+// their rows in ws) those of key, "<provider>/<model>", not resting for the
+// model: the next ones asked once the accounts whose own list has the model
+// refused it as one they don't serve. The rest are returned too, for
+// none to be asked twice.
+func unlistedNext(cs []candidate, ws []Weighed, key string) (next []candidate, nextW []Weighed, restCs []candidate, restWs []Weighed) {
+	for i, c := range cs {
+		_, resting := restingOf(c)
+		if c.p.ID+"/"+c.model != key || resting {
+			restCs = append(restCs, c)
+			if i < len(ws) {
+				restWs = append(restWs, ws[i])
+			}
+			continue
+		}
+		next = append(next, c)
+		if i < len(ws) {
+			w := ws[i]
+			w.Unlisted = false // asked, after those that list the model
+			nextW = append(nextW, w)
+		}
+	}
+	return next, nextW, restCs, restWs
+}
+
+// askUnlisted moves the rows of the unlisted accounts asked next (ws) from
+// a route's left to its order, after the row of c, the one that refused
+// the model: the Routing page has them asked, not "unlisted, skipped".
+func askUnlisted(order, left []Weighed, c candidate, ws []Weighed) ([]Weighed, []Weighed) {
+	asked := make(map[string]bool, len(ws))
+	for _, w := range ws {
+		asked[w.ID+"/"+w.Model] = true
+	}
+	left = slices.DeleteFunc(slices.Clone(left), func(w Weighed) bool { return w.Unlisted && asked[w.ID+"/"+w.Model] })
+	at := slices.IndexFunc(order, func(w Weighed) bool { return w.ID == c.rest && w.Model == c.model })
+	if at < 0 {
+		return append(slices.Clip(order), ws...), left
+	}
+	return slices.Concat(order[:at+1], ws, order[at+1:]), left
 }

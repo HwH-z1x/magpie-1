@@ -44,7 +44,7 @@ function serve(lang, feed) {
       const trace = (routes) => json({ mine: true, now: new Date().toISOString(), seq: routes.length ? routes[routes.length - 1].seq : Number(url.searchParams.get("after")), totals: { requests: 0, rerouted: 0, errors: 0 }, routes });
       if (!url.searchParams.get("wait")) return trace(first);
       const r = await new Promise((res) => { feed.next = res; });
-      return trace([r]);
+      return trace([].concat(r));
     }
     if (url.pathname === "/api/gateway/history") return json({ cut: false, days: [], routes: [] });
     if (url.pathname === "/api/groups") return json({ groups: [], models: [], pools: [] });
@@ -108,6 +108,53 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const after = await story();
         assert(after.h < tall.h - 40, `the box shrank back after the long request: ${after.h} vs ${tall.h} (min-height ${after.held || "none"})`);
         assert(Math.abs(after.h - short.h) <= 1, `as tall as a short request: ${after.h} vs ${short.h}`);
+        assert(after.h - after.content <= 24, `no empty room under its lines: ${after.h} tall, lines to ${after.content}`);
+
+        assert.deepEqual(errors, []);
+        feed.next?.(req(999, 0));
+        await context.close();
+      });
+
+      // A busy gateway (shensmart on Discord, a remote magpie in a local
+      // browser: the room under the story grew and never shrank back):
+      // each request is answered as the next one starts, so the two come
+      // in one trace and the newest is always under way. None of them is
+      // ever drawn answered, yet the long one stops holding the box once
+      // as many requests have been told after it.
+      await t.test(`${lang} ${width}px, the newest always under way`, async () => {
+        const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: "reduce" });
+        const page = await context.newPage();
+        page.setDefaultTimeout(5000);
+        const errors = [];
+        page.on("pageerror", (e) => errors.push(e.message));
+        const feed = { next: null };
+        await page.route("**/*", serve(lang, feed));
+        await page.goto("http://magpie.test/?view=routing");
+        await page.locator(".rt-req").nth(first.length - 1).waitFor();
+        await page.locator(".rt-log .rt-steps li").first().waitFor();
+        await page.waitForTimeout(800);
+        const send = async (r) => {
+          for (let i = 0; i < 60 && !feed.next; i++) await page.waitForTimeout(50);
+          const next = feed.next;
+          assert(next, "the page asks for the next trace");
+          feed.next = null;
+          next(r);
+          await page.waitForTimeout(400);
+        };
+        const story = () => page.evaluate(() => {
+          const s = document.querySelector(".rt-log .rt-steps");
+          const lines = [...s.children].reduce((b, li) => Math.max(b, li.getBoundingClientRect().bottom), s.getBoundingClientRect().top);
+          return { h: s.getBoundingClientRect().height, content: lines - s.getBoundingClientRect().top, held: s.style.minHeight };
+        });
+
+        await send(req(103, 4));
+        const tall = await story();
+        await send([req(104, 0, "start")]);
+        const going = await story();
+        assert(going.h >= tall.h - 0.5, `held while the next is under way: ${going.h} vs ${tall.h}`);
+        for (let id = 105; id <= 110; id++) await send([req(id - 1, 0), req(id, 0, "start")]);
+        const after = await story();
+        assert(after.h < tall.h - 40, `the box shrank back with the newest always under way: ${after.h} vs ${tall.h} (min-height ${after.held || "none"})`);
         assert(after.h - after.content <= 24, `no empty room under its lines: ${after.h} tall, lines to ${after.content}`);
 
         assert.deepEqual(errors, []);

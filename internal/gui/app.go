@@ -311,6 +311,14 @@ func Run(version string, showMain bool, link string) error {
 	if devRole() == "backend" {
 		return devBackend(func(w Windows) http.Handler { return Handler(w, startBackend()) })
 	}
+	// A restart to update on a Mac or Linux started this one beside the
+	// magpie before, which hands it the gateway (handover.go).
+	startExe, _ = update.Executable()
+	handoverHost.Store(true)
+	before := 0
+	if startExe != "" {
+		before = takeOver(startExe)
+	}
 	// After an update off the Mac, the old process starts this one and then
 	// quits; let it go before looking for the gateway.
 	update.AwaitPredecessor()
@@ -348,6 +356,12 @@ func Run(version string, showMain bool, link string) error {
 	if handler == nil {
 		handler = Handler(h, startBackend())
 	}
+	// Linux: the magpie before holds the app's D-Bus name until it quits,
+	// once it has finished its requests; this one serves the gateway
+	// meanwhile, and puts its tray icon up after
+	if before != 0 && runtime.GOOS == "linux" {
+		awaitExit(before, handedOffWait)
+	}
 	h.app = application.New(application.Options{
 		// Windows and Linux start a new process for a magpie:// link (or a
 		// second launch); it hands its arguments to the running one and quits.
@@ -368,8 +382,14 @@ func Run(version string, showMain bool, link string) error {
 		// this process serves: Codex left pointed at it would retry till
 		// magpie is open again (Leon920717 on X). The next start writes it
 		// again (Sync).
+		// A magpie that handed the gateway to the new version (handover.go)
+		// leaves both to it: the failover goes on through the new one, and
+		// so do the threads.
 		OnShutdown: func() {
 			proc.EndProbes()
+			if handedOver.Load() {
+				return
+			}
 			if served.Load() != nil {
 				if err := agent.EndCodexFailover(); err != nil {
 					log.Println("codex failover:", err)
@@ -431,7 +451,7 @@ func Run(version string, showMain bool, link string) error {
 		// the window comes back if it was open; the tray alone if not
 		now := func() bool {
 			if restartToUpdate(false, h.MainShown(), "") {
-				h.app.Quit()
+				leave(h.app.Quit)
 				return true
 			}
 			return false
@@ -470,7 +490,7 @@ func Run(version string, showMain bool, link string) error {
 	// Settings' AutoRestart: the window comes back only if it was up (#2096)
 	updates.autoRestart = func() bool {
 		if restartInto(false, h.MainShown(), "", true) {
-			h.app.Quit()
+			leave(h.app.Quit)
 			return true
 		}
 		return false
@@ -492,6 +512,8 @@ func Run(version string, showMain bool, link string) error {
 		library.KeepLinked(30 * time.Second)
 	}()
 
+	// before the item is made, which starts as hidden as AppKit kept it
+	hiddenAtStart := bringTrayBack()
 	h.tray = h.app.SystemTray.New()
 	if runtime.GOOS == "linux" {
 		// set before the tray starts, it is the item's id too, which
@@ -513,6 +535,23 @@ func Run(version string, showMain bool, link string) error {
 	}
 	h.tray.SetMenu(menu)
 	h.tray.AttachWindow(h.panel).WindowOffset(6)
+	// a Mac that handed the gateway to the new version (handover.go)
+	// leaves the menu bar to it while it finishes its requests: one bird
+	if runtime.GOOS == "darwin" {
+		onHandedOver = h.leaveMenuBar
+		// a magpie before this fix hid its item for good as it handed
+		// over (leaveMenuBar): once it has quit, bring the icon back
+		if before != 0 && !hiddenAtStart {
+			go func() {
+				awaitExit(before, handedOffWait)
+				<-h.ready
+				if forgetTrayHidden() > 0 {
+					log.Println("tray: brought back the menu bar icon the magpie before hid")
+				}
+				h.tray.Show()
+			}()
+		}
+	}
 	h.watchTrayUsage()
 	// Omarchy's bar shows magpie once: as its widget (Settings → Bar
 	// icon) or as the tray's item, not both
@@ -732,6 +771,25 @@ var OpenView string
 // and SIGTERM itself (it starts listening as it runs, before the app is
 // said to have started); until then a signal is magpie's to handle.
 var Started func()
+
+// leaveMenuBar is a Mac's magpie that handed the gateway to the new
+// version leaving the menu bar, panel, window and Dock to it while it
+// finishes its requests: one bird. Hidden, the item's visibility is kept by
+// AppKit for the app, the new version's item and every later one too, so it
+// is forgotten once the hide is made.
+func (h *host) leaveMenuBar() {
+	application.InvokeSync(func() {
+		h.tray.Hide()
+		forgetTrayHiddenLater()
+		if h.panel != nil {
+			h.panel.Hide()
+		}
+		if h.main != nil {
+			h.main.Hide()
+		}
+		setDock(false, false)
+	})
+}
 
 // setTrayInBar has the tray's item leave the bar's tray while magpie's icon
 // is in Omarchy's bar as its widget, and come back once it isn't. The item

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // Stats is what every session spent, day by day: all of them, not only the
@@ -121,6 +123,16 @@ func statsAt(days int, now time.Time) Stats { return statsIn(days, now, nil) }
 
 // statsIn is statsAt, filling native as StatsAndNative says when not nil.
 func statsIn(days int, now time.Time, native map[string]bool) Stats {
+	// read before the locks: it reads settings.json
+	alias := provider.UsageAlias()
+	st := statsRead(days, now, native)
+	if alias != nil {
+		st = aliasStats(st, alias)
+	}
+	return st
+}
+
+func statsRead(days int, now time.Time, native map[string]bool) Stats {
 	now = now.In(time.Local)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
 	var since time.Time
@@ -148,10 +160,10 @@ func statsIn(days int, now time.Time, native map[string]bool) Stats {
 		for _, f := range files {
 			groups[f.key] = append(groups[f.key], f)
 		}
-		price := pricer()
+		price, titles := pricer(), codexTitleOf()
 		for _, fs := range groups {
 			// as List: a session nothing was said in is not listed
-			if s, ok := assembleListed(fs, price); ok {
+			if s, ok := assembleListed(fs, price, titles); ok {
 				native[s.Agent+"|"+s.ID] = true
 			}
 		}
@@ -279,7 +291,7 @@ func statsIn(days int, now time.Time, native map[string]bool) Stats {
 	for date := range dates {
 		byDate[date] = &Day{Date: date, Usage: []Usage{}, Active: []Active{}}
 	}
-	price := pricer()
+	price, titles := pricer(), codexTitleOf()
 	for k, t := range use {
 		u := Usage{Agent: k.agent, Cwd: k.cwd, Model: k.model, Tokens: t}
 		if p := price(k.model); p != nil {
@@ -336,7 +348,7 @@ func statsIn(days int, now time.Time, native map[string]bool) Stats {
 		if len(sh.dates) == 0 {
 			continue
 		}
-		s, ok := assembleListed(groups[key], price)
+		s, ok := assembleListed(groups[key], price, titles)
 		if !ok {
 			continue
 		}

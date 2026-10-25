@@ -2109,13 +2109,44 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 	// unstreamedQuiet, as when Claude Code goes on to call the client's
 	// tools and waits on them
 	unstreamed, unstreamedStop, blocks := "", "", 0
+	// The reply's tool calls written as text (textCalls), held back from
+	// the client. A reply that ends with them and calls none of the
+	// client's tools goes on: once its turn's result is in, the run is
+	// told to make them (textCallsAsk), and the reply goes on in its next
+	// message, as after Claude Code's own call. Only once a reply: told
+	// again, the words go to the client as written.
+	var calls textCalls
+	retell := false    // the run is told to make its calls once this turn's result is in
+	retold := false    // this reply was told so
 	var pmu sync.Mutex // held for each line, and by quiet's settle
 	var quiet *time.Timer
+	text := func(s string) {
+		if s != "" && !r.schema {
+			shown = true
+			r.emit(Event{Kind: KText, Text: s})
+		}
+	}
+	said := func(s string) { text(calls.push(s)) }
 	// what each message's end does, once its stop is known
 	end := func(why string) {
 		if goesOn := why != "" && r.schema && !theirs || why == "tool_use" && len(own) > 0 && !theirs; goesOn {
 			inside = true // the answer is the next message's, or the result's
 		} else if why != "" {
+			held, seen := calls.end()
+			switch {
+			case seen && !theirs && why == "end_turn" && !retold && r.stdin != nil:
+				retell, retold, inside = true, true, true
+				log.Printf("claude: a reply wrote its tool calls as text (%d bytes held back); its run is told to make them", len(held))
+				return
+			case seen && theirs:
+				// it called the client's tools too: those are the reply's
+				log.Printf("claude: a reply wrote tool calls as text beside real ones; the text (%d bytes) is left out", len(held))
+			case seen:
+				log.Printf("claude: a reply wrote its tool calls as text again; the client is told the words as written")
+				text(held)
+			default:
+				text(held)
+			}
 			r.emit(Event{Kind: KStop, Stop: stopFromAnthropic(why)})
 		}
 	}
@@ -2158,12 +2189,6 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 		r.mu.Unlock()
 		return name, true
 	}
-	text := func(s string) {
-		if s != "" && !r.schema {
-			shown = true
-			r.emit(Event{Kind: KText, Text: s})
-		}
-	}
 	// begin starts a message: the reply's first, or one it goes on in,
 	// after Claude Code's own call or an attempt cut short
 	begin := func(id, model string, u cliUsage) {
@@ -2175,6 +2200,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			return
 		}
 		before, this = Usage{}, Usage{}
+		calls, retold = textCalls{}, false
 		r.mu.Lock()
 		r.asked = nil
 		r.mu.Unlock()
@@ -2305,7 +2331,22 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			}
 			return
 		}
+		if envelope.Type == "result" && retell && !envelope.IsError {
+			// the turn whose reply wrote its calls as text is over: the run
+			// is told to make them, and the reply goes on in its answer
+			retell = false
+			calls = textCalls{}
+			ask, _ := json.Marshal(map[string]any{"type": "user", "uuid": newUUID(), "message": map[string]any{"role": "user",
+				"content": []map[string]any{{"type": "text", "text": textCallsAsk}}}})
+			if err := r.tell(ask); err != nil {
+				inside = false
+				r.emit(Event{Kind: KError, Text: "Claude Code could not be told to make the tool calls its reply wrote as text: " + err.Error(), Status: http.StatusBadGateway, RequestID: reqID})
+				r.endSegment()
+			}
+			return
+		}
 		if envelope.Type == "result" {
+			retell = false
 			// a turn that failed — out of quota, rate limited — ends with
 			// this and no message_stop, the CLI waiting on its next input:
 			// the reply ends here, or it would wait with it (#177)
@@ -2385,7 +2426,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 						r.emit(Event{Kind: KSig, Text: c.Signature})
 					}
 				case "text":
-					text(c.Text)
+					said(c.Text)
 				case "tool_use":
 					name, theirs := toolStart(index, c.Name)
 					if !theirs {
@@ -2440,7 +2481,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 					r.emit(Event{Kind: KToolStart, ID: e.ContentBlock.ID, Name: name})
 				}
 			case "text":
-				text(e.ContentBlock.Text)
+				said(e.ContentBlock.Text)
 			case "thinking":
 				// a block of its own, signed with no text or not (#1445)
 				r.emit(Event{Kind: KThinkStart})
@@ -2457,7 +2498,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 		case "content_block_delta":
 			switch e.Delta.Type {
 			case "text_delta":
-				text(e.Delta.Text)
+				said(e.Delta.Text)
 			case "thinking_delta":
 				r.emit(Event{Kind: KThink, Text: e.Delta.Thinking})
 			case "signature_delta":
@@ -2674,6 +2715,9 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 			text.Reset()
 			chunk = len(blocks) - 1
 		}
+	}
+	if slices.ContainsFunc(req.Messages, callsTool) {
+		text.WriteString(pastCallsNote + "\n\n")
 	}
 	if split > 0 {
 		text.WriteString("</current_turn>")
@@ -2901,6 +2945,9 @@ func renderClaudeTurn(msgs []Message, tools []Tool) []map[string]any {
 			text.WriteString(label + ": ")
 		}
 		blocks = renderParts(blocks, &text, m.Parts, offered)
+	}
+	if slices.ContainsFunc(msgs, callsTool) {
+		text.WriteString("\n\n" + pastCallsNote)
 	}
 	return closeBlocks(blocks, &text)
 }
@@ -3265,15 +3312,22 @@ func saidWithResults(msgs []Message) string {
 	for _, m := range msgs[i:] {
 		captions := withImages(m)
 		for _, p := range m.Parts {
+			// a background task's notification goes with the results
+			// (withTaskNotices), not as the user's
+			text := p.Text
+			if p.Kind == Text && results && !captions {
+				text = taskNotice.ReplaceAllString(text, "")
+			}
 			switch {
 			case p.Kind == ToolResult:
 				results = true
 			case p.Kind != Text || !results || captions:
-			case midTurnHead.MatchString(p.Text):
-				said = append(said, midTurnSaid(p.Text)...)
+			case midTurnHead.MatchString(text):
+				said = append(said, midTurnSaid(text)...)
 			case m.Role == "system" || m.Role == "developer":
-			case !agentNotice(p.Text):
-				said = append(said, p.Text)
+			case text != p.Text && agentNotice(text):
+			case !agentNotice(text):
+				said = append(said, text)
 			}
 		}
 	}
@@ -3281,6 +3335,56 @@ func saidWithResults(msgs []Message) string {
 		return ""
 	}
 	return strings.Join(said, "\n\n")
+}
+
+// taskNotice is Claude Code's notification that a background task (a
+// sub-agent, a background command) ended, with the header it puts before
+// it: "[SYSTEM NOTIFICATION - NOT USER INPUT]" … <task-notification>…
+// </task-notification>.
+var taskNotice = regexp.MustCompile(`(?s)(?:\[SYSTEM NOTIFICATION - NOT USER INPUT\][^<]*)?<task-notification>.*?</task-notification>`)
+
+// withTaskNotices hands the run the notifications of background tasks
+// that came after the results (taskNotice), in a reminder at the end of the
+// last result, where Claude Code itself puts one for some models (inside
+// the tool_result's text). Claude Code 2.1.310 on Opus sends one that
+// arrives mid-turn as a {role: "system"} message after the results, and
+// before as a text block of the results' message; both were left out of
+// what the run was handed (#2060's rule for hooks' notices), so the run's
+// model never heard that a sub-agent it started in the background had
+// finished, nor its result, and waited for it (stones_2026 on Discord).
+func withTaskNotices(results []Part, msgs []Message) []Part {
+	if len(results) == 0 {
+		return results
+	}
+	i := len(msgs)
+	for i > 0 && msgs[i-1].Role != "assistant" {
+		i--
+	}
+	var notices []string
+	seen := false
+	for _, m := range msgs[i:] {
+		if withImages(m) {
+			continue
+		}
+		for _, p := range m.Parts {
+			switch {
+			case p.Kind == ToolResult:
+				seen = true
+			case p.Kind == Text && seen:
+				notices = append(notices, taskNotice.FindAllString(p.Text, -1)...)
+			}
+		}
+	}
+	if len(notices) == 0 {
+		return results
+	}
+	out := slices.Clone(results)
+	last := &out[len(out)-1]
+	if last.Text != "" {
+		last.Text += "\n\n"
+	}
+	last.Text += "<system-reminder>\n" + strings.Join(notices, "\n\n") + "\n</system-reminder>"
+	return out
 }
 
 var (
@@ -3492,6 +3596,11 @@ func (b *subscriptionBridge) mcpCall(w http.ResponseWriter, r *http.Request) {
 	run := b.runs[token]
 	b.mu.Unlock()
 	if run == nil {
+		// a run of the magpie this one took the gateway over from, its
+		// turn under way when the gateway changed hands (handover.go)
+		if forwardCallback(w, r) {
+			return
+		}
 		http.Error(w, "unknown or expired Claude run", http.StatusNotFound)
 		return
 	}
@@ -4057,6 +4166,7 @@ func (b *subscriptionBridge) whyCallsLost(req *Request) string {
 }
 
 func (s *Server) serveClaudeSubscription(w http.ResponseWriter, r *http.Request, from provider.Protocol, p provider.Provider, model string, body []byte, usage *Usage) (int, string) {
+	defer s.bridgeTurn()()
 	owner := p.ID
 	if p.Account != nil {
 		owner += "\x00" + p.Account.User
@@ -4245,7 +4355,7 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 			run.mu.Unlock()
 		}
 		if err == nil {
-			events, err = run.continueWith(results, saidWithResults(req.Messages), more)
+			events, err = run.continueWith(withTaskNotices(results, req.Messages), saidWithResults(req.Messages), more)
 		}
 		if err != nil {
 			run.abort()

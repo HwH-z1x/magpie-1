@@ -187,8 +187,13 @@
 #view-routing .row-head { margin: 14px 0 6px; padding: 0 2px; gap: 0; }
 #view-routing .row-head .note { font-size: 11px; color: var(--faint); margin-left: 8px; }
 #view-routing .row-head .rt-livedot + .note { margin-left: 8px; }
-.rt-mask, .rt-newgroup { display: inline-flex; align-items: center; gap: 5px; }
-.rt-mask svg, .rt-newgroup svg { width: 13px; height: 13px; flex: none; }
+.rt-mask, .rt-newgroup, .rt-gogroups { display: inline-flex; align-items: center; gap: 5px; }
+.rt-mask svg, .rt-newgroup svg, .rt-gogroups svg { width: 13px; height: 13px; flex: none; }
+/* the routing groups, far below with many models: the head goes to them */
+.rt-gogroups { margin-right: 6px; flex: none; }
+.rt-gogroups[data-fit="icon"] > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.rt-gogroups[data-fit="none"] { display: none; }
+.rt-gsec:focus { outline: none; }
 /* the routing groups' New group, at the top too: the groups sit below the
    requests, out of sight on a first look (#944) */
 .rt-newgroup { margin-right: 6px; }
@@ -440,6 +445,12 @@ button.rt-session { cursor: pointer; }
 .rt-group .nm b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rt-group .nm code.mdl { font: var(--code-style, normal) 500 11px/1.5 var(--code-font, var(--code)); font-stretch: var(--code-stretch, 100%); color: var(--fg-2); background: var(--card-2); border-radius: 5px; padding: 0 5px; white-space: nowrap; }
 .rt-group .nm small.auto { font-size: 11px; color: var(--faint); white-space: nowrap; }
+/* the check a group just saved shows by its name (savedMark) */
+.rt-group .nm .rt-gsaved { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 50%; background: var(--accent); color: #fff; }
+/* Save, while the gateway saves: a small spinner, as iOS's */
+.rt-gedit button.primary.busy { opacity: .75; display: inline-flex; align-items: center; gap: 6px; }
+.rt-gedit button.primary.busy::before { content: ""; width: 10px; height: 10px; border-radius: 50%; border: 1.6px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .rt-gedit button.primary.busy::before { animation-duration: 2s; } }
 .rt-group .mem { margin-top: 2px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* a pattern the group finds models by, and how many it matches now */
 .rt-group .mem.pat code, .rt-pats code { font: var(--code-style, normal) 500 11px/1.5 var(--code-font, var(--code)); font-stretch: var(--code-stretch, 100%); color: var(--fg-2); }
@@ -454,6 +465,11 @@ button.rt-session { cursor: pointer; }
 .rt-group .tag { font-size: 11px; line-height: 18px; padding: 0 8px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); white-space: nowrap; }
 .rt-group .tag.bad { color: var(--red); }
 .rt-group .tag.idle { opacity: .55; }
+/* the routing tag is a pop-up button for the group's routings (#3450) */
+.rt-group button.tag.rt-groute { display: inline-flex; align-items: center; gap: 3px; height: auto; margin: 0; padding: 0 6px 0 8px; border: 0; background: transparent; font: inherit; font-size: 11px; line-height: 18px; color: var(--muted); cursor: pointer; transition: color .12s, background .12s; }
+.rt-group button.tag.rt-groute svg { flex: none; opacity: .7; }
+.rt-group button.tag.rt-groute:hover, .rt-group button.tag.rt-groute.open { color: var(--fg); background: var(--card-2); }
+.rt-group button.tag.rt-groute:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
 /* a manual group's members on its card: the one picked, marked by a dot */
 .rt-picks { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .rt-pick { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; height: 22px; padding: 0 8px 0 6px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11.5px; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
@@ -509,7 +525,8 @@ button.rt-session { cursor: pointer; }
 .rt-pool .ctl { display: grid; grid-template-columns: auto auto; align-items: center; justify-items: start; gap: 6px 8px; }
 .rt-pool .lab { display: contents; }
 .rt-pool .lab small { font-size: 11px; color: var(--muted); }
-@media (max-width: 560px) { body:not(.web) .rt-group .tags { display: none; } }
+/* narrow, a row keeps only its routing, which switches from here */
+@media (max-width: 560px) { body:not(.web) .rt-group .tags > :not(.rt-groute) { display: none; } }
 @media (max-width: 760px), (pointer: coarse) and (max-width: 1024px) {
   body.web .rt-group {
     display: grid; grid-template-columns: auto minmax(0, 1fr) auto; /* the logos as wide as they are */
@@ -615,6 +632,18 @@ button.rt-session { cursor: pointer; }
 @supports (grid-template-columns: subgrid) { .rt-rule { grid-template-columns: subgrid; } }
 .rt-rule:first-child { border-top: 0; padding-top: 2px; }
 .rt-rule > .i { line-height: 26px; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; text-align: right; }
+/* a rule's number is its handle, as a model's is: the grip beside it
+   shows on hover, dragged or from the keyboard only */
+.rt-rule > .rt-rhandle.ag-handle { position: relative; width: 16px; height: 26px; padding: 0; margin: 0; font: inherit; font-size: 11.5px; line-height: 26px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.rt-rule > .rt-rhandle::before { content: ""; position: absolute; left: -5px; top: 50%; width: 5px; height: 11px; margin-top: -5.5px; background: radial-gradient(circle, var(--muted) .9px, transparent 1.2px) 0 0 / 3.5px 3.75px; opacity: 0; transition: opacity .15s; }
+.rt-rule:is(:hover, .dragging) > .rt-rhandle::before { opacity: 1; }
+/* apart: Safari before 15.4 drops a whole selector list with :focus-visible in it */
+.rt-rule > .rt-rhandle:focus-visible::before { opacity: 1; }
+.rt-rules > .fbl.sorting { user-select: none; -webkit-user-select: none; }
+.rt-rules > .fbl.sorting > .rt-rule { transition: transform .22s cubic-bezier(.22, 1, .36, 1); }
+.rt-rules > .fbl.sorting .rt-rhandle { cursor: grabbing; }
+.rt-rules > .fbl > .rt-rule.dragging { position: relative; z-index: 2; background: var(--card); box-shadow: 0 6px 18px rgba(20, 22, 30, .12), 0 0 0 1px var(--line); border-radius: 8px; transition: none; }
+@media (prefers-reduced-motion: reduce) { .rt-rules > .fbl.sorting > .rt-rule { transition: none; } }
 .rt-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 /* on a narrow page what it does goes under the conditions */
 @media (max-width: 640px) {
@@ -636,15 +665,16 @@ button.rt-session { cursor: pointer; }
 .rt-cx:hover { color: var(--fg); border-color: var(--muted); }
 .rt-c:hover > .rt-cx, .rt-c:focus-within > .rt-cx { opacity: 1; pointer-events: auto; }
 @media (hover: none) { .rt-cx { opacity: 1; pointer-events: auto; } }
-/* the quiet + that adds a condition; in words while the rule has none */
-.rt-addc {
+/* the quiet + that adds a condition (in words while the rule has none),
+   and the one that adds the rule's next model */
+.rt-addc, .rt-adduse {
   display: inline-grid; grid-auto-flow: column; place-items: center; gap: 5px;
   width: 24px; height: 24px; padding: 0; border-radius: 999px; border: 1px solid transparent;
   background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
   transition: color .15s, border-color .15s, background .15s;
 }
 .rt-addc.wide { width: auto; height: 26px; padding: 0 10px 0 8px; border: 1px dashed var(--line); }
-.rt-addc:hover, .rt-addc.open, .rt-addc:focus-visible { color: var(--fg); background: var(--card-2); }
+.rt-addc:hover, .rt-addc.open, .rt-addc:focus-visible, .rt-adduse:hover, .rt-adduse.open, .rt-adduse:focus-visible { color: var(--fg); background: var(--card-2); }
 .rt-addc.wide:hover, .rt-addc.wide.open { border-color: var(--muted); }
 /* the rule's ⋯, always drawn, in the icons' quiet grey: it is the only
    way to move or remove a rule, and drawn on hover alone nobody found it
@@ -804,7 +834,9 @@ button.rt-session { cursor: pointer; }
 .pr-today b { color: var(--fg); font-weight: 600; }
 .pr-head .text { flex: none; font-size: 12px; }
 .skeleton.pr-sk { display: inline-block; width: 150px; height: 9px; border-radius: 4px; vertical-align: middle; }
-.skeleton.pr-sk-row { height: 40px; border-radius: 11px; }
+/* the stage and the requests to come, their own size, as skeletons */
+.skeleton.pr-ghost { border-radius: 11px; }
+.pr-ghost > * { visibility: hidden; }
 /* a Manual group's model, picked from the tray (#2489) */
 .pr-picks { display: flex; flex-direction: column; padding: 4px; border-radius: 11px; background: var(--card); box-shadow: var(--card-edge); }
 .pr-pick { display: flex; align-items: center; gap: 10px; min-height: 30px; padding: 2px 4px 2px 8px; font-size: 12px; }

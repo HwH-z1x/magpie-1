@@ -31,6 +31,7 @@ import (
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/awake"
+	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/gwbudget"
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/gwtool"
@@ -388,6 +389,8 @@ type Server struct {
 	// from, so every later turn goes straight to one that takes them.
 	unfit        map[string]bool
 	subscription *subscriptionBridge
+	// imageStore is the image MCP server's jobs and images (image_mcp.go)
+	imageStore   imageMCPStore
 	debug        bool
 	trace        trace // what routing did with each request, for the Gateway view
 	titlePrompts titlePrompts
@@ -402,6 +405,12 @@ type Server struct {
 	// taken off it (see Relisten)
 	lnMu sync.Mutex
 	ln   net.Listener
+	// front is Front's handler, built once
+	frontOnce sync.Once
+	front     http.Handler
+	// handedOff: another magpie serves the port now, and this one's end
+	// waits for its requests in flight to finish (handover.go)
+	handedOff atomic.Bool
 	// what it serves other computers TLS with, nil without (tls.go)
 	tls *tls.Config
 	// the images described for models that can't see them (vision.go)
@@ -535,6 +544,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	s.lnMu.Lock()
 	s.ln = ln
 	s.lnMu.Unlock()
+	// a socket handed over (handover.go): the magpie that had it stops
+	// accepting once told this one serves on it
+	if ack := takeAck(); ack != nil {
+		go ack()
+	}
 	// the observers plugins registered (usage.Observer) run while this
 	// process serves, and plugins turned on or off elsewhere (the window,
 	// `magpie plugin builtin`) come and go here too
@@ -573,7 +587,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	freshCtx, stopFresh := context.WithCancel(ctx)
 	defer stopFresh()
 	go pluginrt.KeepFresh(freshCtx, 2*time.Second, settings.Path(), provider.Path(), plugin.ListPath(), plugin.ToolsPath(), access.Path())
-	srv := &http.Server{Handler: lanGuard(s.Handler()), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 5 * time.Minute}
+	srv := &http.Server{Handler: s.Front(), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 5 * time.Minute}
 	// the magpie serving the gateway, and only it, keeps the saved accounts
 	// signed in, so two never refresh one sign-in at once
 	go provider.KeepLoginsAlive(ctx)
@@ -597,6 +611,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	go provider.KeepPluginsCheckedIn(ctx)
 	// and moves the built-in subscriptions being retired onto their plugins
 	go provider.KeepRetiringMoved(ctx)
+	// and fetches the partner list every hour, asked for or not
+	go provider.KeepPartnersFresh(ctx)
 	go provider.KeepPluginsListed(ctx) // models a plugin's vendor drops or adds, while magpie runs
 	// and fetches the lists of the providers the user asked to keep fresh (#2135)
 	go provider.KeepListsFresh(ctx)
@@ -619,15 +635,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	for _, f := range WhileServing {
 		go f(ctx)
 	}
+	// and, on Windows, serves WSL distros under NAT at Windows' address on
+	// their network (wsl.go)
+	go s.serveWSL(ctx, srv)
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
 		<-ctx.Done()
-		wait := 2 * time.Second
-		if Handover {
-			wait = 15 * time.Minute
-		}
-		c, cancel := context.WithTimeout(context.Background(), wait)
+		c, cancel := context.WithTimeout(context.Background(), s.drainFor())
 		defer cancel()
 		srv.Shutdown(c)
 		s.subscription.abortAll()
@@ -693,6 +708,9 @@ func (s *Server) Handler() http.Handler {
 	// a CPU profile of this process over some seconds, for magpie cpu
 	// (loopback only)
 	mux.HandleFunc("GET "+CPUPath, s.cpuProfile)
+	// every goroutine's stack and wait, for magpie goroutines (loopback
+	// only)
+	mux.HandleFunc("GET "+GoroutinesPath, s.goroutineDump)
 	mux.HandleFunc("GET /v1/magpie/omarchy", s.omarchyTheme)
 	mux.HandleFunc("OPTIONS /v1/magpie/omarchy", s.omarchyTheme)
 	mux.HandleFunc("POST /v1/chat/completions", s.handle(provider.Chat))
@@ -731,6 +749,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/mcp/{name}", s.mcpProxy)
 	mux.HandleFunc(SearchMCPPath, s.searchMCP)
 	mux.HandleFunc(VisionMCPPath, s.visionMCP)
+	mux.HandleFunc(ImageMCPPath, s.imageMCP)
+	mux.HandleFunc(ImageMCPFiles+"{name}", s.imageMCPFile)
 	mux.HandleFunc(ToolsMCPPath, s.toolsMCP)
 	mux.HandleFunc(CodexPath+"/", s.codexBackend)
 	mux.HandleFunc("GET "+CodexCatalogPath, s.codexCatalog)
@@ -766,7 +786,7 @@ var catalogSize stamped[struct{}, int]
 
 func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"name": "magpie", "version": Version, "models": catalogSize.get(struct{}{}, func() int { return len(provider.Catalog()) }), "window": Window,
-		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", "/v1/embeddings", "/v1/rerank", "/v1/audio/transcriptions", "/v1/audio/translations", "/v1/magpie/quotas", "/v1/magpie/quotas/history", "/v1/magpie/usage", "/v1/magpie/usage/requests", "/v1/magpie/route", "/v1/magpie/trace", SearchMCPPath, VisionMCPPath, ToolsMCPPath}}
+		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", "/v1/embeddings", "/v1/rerank", "/v1/audio/transcriptions", "/v1/audio/translations", "/v1/magpie/quotas", "/v1/magpie/quotas/history", "/v1/magpie/usage", "/v1/magpie/usage/requests", "/v1/magpie/route", "/v1/magpie/trace", SearchMCPPath, VisionMCPPath, ImageMCPPath, ToolsMCPPath}}
 	// which process serves, for another magpie on this computer to name it
 	// on its Routing page (#2606); not told to another machine
 	if local(r) {
@@ -786,7 +806,7 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 // told its quotas is told those of what it may use (scopeQuotas, #2216).
 func (s *Server) quotas(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
-		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
+		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
 		return
 	}
 	scope, ok := scopeQuotas(w, r)
@@ -810,7 +830,7 @@ func (s *Server) quotas(w http.ResponseWriter, r *http.Request) {
 // /v1/magpie/quotas stays the snapshot.
 func (s *Server) quotasHistory(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
-		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
+		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
 		return
 	}
 	scope, ok := scopeQuotas(w, r)
@@ -826,7 +846,7 @@ func (s *Server) quotasHistory(w http.ResponseWriter, r *http.Request) {
 // show: its own cache, however old, and no vendor asked for it.
 func (s *Server) quotaCards(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
-		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
+		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
 		return
 	}
 	scope, ok := scopeQuotas(w, r)
@@ -852,7 +872,7 @@ const remoteRefreshGap = 30 * time.Second
 // is named, then the cards are answered as quotaCards answers them.
 func (s *Server) quotaCardsRefresh(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
-		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
+		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
 		return
 	}
 	scope, ok := scopeQuotas(w, r)
@@ -926,7 +946,7 @@ func modelObject(e provider.Entry) map[string]any {
 	// the APIs a request for the model goes on as it is, so it sends each
 	// one on an API of these rather than having it translated twice, and
 	// whether it takes images
-	if native := nativeEndpoints(e); len(native) > 0 {
+	if native := provider.NativeEndpoints(e); len(native) > 0 {
 		m["native_endpoints"] = native
 	}
 	// what it takes and gives: every kind its source listed, audio, video
@@ -940,6 +960,18 @@ func modelObject(e provider.Entry) map[string]any {
 			mod["output"] = out
 		}
 		m["modalities"] = mod
+	}
+	return m
+}
+
+// pricedModelObject is modelObject with the model's pricing, as the list
+// gives it, for the callers the list tells it to.
+func pricedModelObject(r *http.Request, e provider.Entry) map[string]any {
+	m := modelObject(e)
+	if local(r) || sharedWith(r) {
+		if pr, ok := provider.EntryPriceIn(settings.Load(), provider.GroupFinder(), e); ok {
+			m["pricing"] = catalog.OpenRouterPricing(pr)
+		}
 	}
 	return m
 }
@@ -961,7 +993,7 @@ func modelObject(e provider.Entry) map[string]any {
 func cursorLocalModel(m map[string]any, e provider.Entry) {
 	names := map[string]string{"/v1/chat/completions": "chat_completions", "/v1/responses": "responses", "/v1/messages": "anthropic_messages"}
 	types := []string{}
-	for _, p := range nativeEndpoints(e) {
+	for _, p := range provider.NativeEndpoints(e) {
 		types = append(types, names[p])
 	}
 	if len(types) == 0 {
@@ -989,26 +1021,6 @@ func cursorLocalModel(m map[string]any, e provider.Entry) {
 		c["supports_vision"] = false
 	}
 	m["capabilities"] = c
-}
-
-// nativeEndpoints are the paths a request for the model is relayed on to
-// its provider as it is: the APIs the provider serves it on. None for a
-// routing group, whose members may speak any, or a model every request
-// to is translated anyway (a subscription served through its agent's own
-// API).
-func nativeEndpoints(e provider.Entry) []string {
-	p := e.Provider
-	if e.Group != "" || p.Native(e.Model) == "" {
-		return nil
-	}
-	apis := p.APIs(e.Model)
-	var out []string
-	for _, pr := range p.Speaks() {
-		if slices.Contains(provider.Protocols, pr) && (apis == nil || slices.Contains(apis, pr)) {
-			out = append(out, map[provider.Protocol]string{provider.Chat: "/v1/chat/completions", provider.Responses: "/v1/responses", provider.Anthropic: "/v1/messages"}[pr])
-		}
-	}
-	return out
 }
 
 // drawerObjects are the image models magpie draws with, as another magpie
@@ -1086,11 +1098,18 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 		// there is counted at the same price: told only to this computer
 		// and to one this magpie is shared with by a gateway key, as the
 		// prices are the user's own settings
-		var st settings.Settings
-		var find func(string) (provider.Group, []provider.Member, bool)
-		prices := r.Header.Get(provider.PricesHeader) != "" && (local(r) || sharedWith(r))
-		if prices {
-			st, find = settings.Load(), provider.GroupFinder()
+		//
+		// and to any client, OpenRouter's pricing for each model it knows
+		// a price of (cleary5779 on Discord: an agent built on magpie
+		// shows what a call costs), told to the same callers: the price is
+		// what the Usage page counts the model at, the user's own included.
+		// The settings, groups and providers are read once for the list
+		// (EntryPricer), not once a model
+		told := local(r) || sharedWith(r)
+		prices := told && r.Header.Get(provider.PricesHeader) != ""
+		var priceOf func(provider.Entry) (catalog.Price, bool)
+		if told {
+			priceOf = provider.EntryPricer(settings.Load(), provider.GroupFinder())
 		}
 		// the tiers Codex here is offered on each model (#1234), for every
 		// client: another magpie offers them to its own Codex, and Cindy
@@ -1124,9 +1143,12 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 			if ts := tiers[e.ID]; len(ts) > 0 {
 				m["service_tiers"] = ts
 			}
-			if prices {
-				if pr, ok := provider.EntryPriceIn(st, find, e); ok {
-					m["magpie_price"] = pr
+			if told {
+				if pr, ok := priceOf(e); ok {
+					m["pricing"] = catalog.OpenRouterPricing(pr)
+					if prices {
+						m["magpie_price"] = pr
+					}
 				}
 			}
 			// for another magpie: its name as the agents' lists here call
@@ -1193,14 +1215,14 @@ func (s *Server) model(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, 200, scienceObject(e, provider.Labels([]provider.Entry{e})[0]))
 				return
 			}
-			writeJSON(w, 200, modelObject(e))
+			writeJSON(w, 200, pricedModelObject(r, e))
 			return
 		}
 	}
 	// by its bare id, as the list gives it with that setting on
 	if provider.BareModelIDs() {
 		if e, ok := provider.BareEntry(shown, id); ok {
-			writeJSON(w, 200, modelObject(e))
+			writeJSON(w, 200, pricedModelObject(r, e))
 			return
 		}
 	}
@@ -1242,9 +1264,15 @@ func unprefixed(id string) string {
 // on (#536) — into the model and the level, "" for none. As a routing
 // group's member is read (#189), only a level's name after the last colon is
 // one, and a model a provider has by the whole id ("x:high") is taken whole.
+//
+// A level spelled "off" (":off") is none, as a body's effort "off" is
+// (offAsNone).
 func askedAt(id string) (string, string) {
 	bare, marked := strings.CutSuffix(id, "[1m]")
 	m, e := provider.MemberEffort(bare)
+	if i := strings.LastIndex(bare, ":"); e == "" && i > 0 && strings.EqualFold(bare[i+1:], "off") {
+		m, e = provider.MemberEffort(bare[:i] + ":none")
+	}
 	if e == "" {
 		return id, ""
 	}
@@ -1483,6 +1511,10 @@ func (s *Server) handle(from provider.Protocol) http.HandlerFunc {
 				s.codexDescription(w, r, body, to)
 				return
 			}
+			if to := codexSummariesTo(r.Header, body, true); to != "" {
+				s.codexSummary(w, r, body, to)
+				return
+			}
 			if to := codexPredictionsTo(r.Header, body, true); to != "" {
 				s.codexPrediction(w, r, body, to)
 				return
@@ -1597,6 +1629,9 @@ func estimate(req *Request) int {
 // serve routes one parsed-enough request to its provider.
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Protocol, body []byte) {
 	start := time.Now()
+	// a client's "off" is magpie's none, for every route and check below
+	// that reads the body's effort (plugins#334)
+	body = offAsNone(from, body)
 	// the upstream names in force for this request, read once here rather
 	// than once per place a name is looked up below
 	r = withWires(r)
@@ -1718,7 +1753,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		return m
 	}
-	if m := claudeTierStandIn(r, agent, asked); m != "" {
+	if m := classifierStandIn(agent, from, asked, body); m != "" {
+		// Claude Code's auto mode classifier on its sonnet tier, which
+		// follows a main model /model has moved: the model it moved to
+		asked = grouped(at(m))
+	} else if m := claudeTierStandIn(r, agent, asked); m != "" {
 		// Claude Code (or a wrapper, T3 Code) naming one of Anthropic's
 		// models by its full id: the model it is set to use for that tier,
 		// whether or not magpie serves the id too
@@ -1919,7 +1958,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	ask := s.askClassifier
 	ask = func(model string, intents []string, prev before, effort bool, text string) (verdict, error) {
 		if prev.request {
-			ctx, cancel := context.WithTimeout(r.Context(), classifyTimeout)
+			ctx, cancel := context.WithTimeout(r.Context(), classifyTimeout())
 			defer cancel()
 			prev.ctx = ctx
 		}
@@ -2189,8 +2228,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// the groups in the group as the rule's has them: a model it shares
 	// with a group ahead of it is its, for its rules (#2361)
 	ruled := ms
-	if hit != nil && strings.HasPrefix(hit.Use, provider.GroupPrefix) {
-		ruled = homed(ms, []string{hit.Use})
+	if led := ruleLed(hit, ms, cands); strings.HasPrefix(led, provider.GroupPrefix) {
+		ruled = homed(ms, []string{led})
 	}
 	// the rules of the groups in the group, down the one that goes first
 	var nested []NestedRule
@@ -2336,9 +2375,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	roomFor, roomCap := "", 0
 	// the key or subscription account the last try went to (#557)
 	providerKeyID, providerKeyName, providerAccount := "", "", ""
-	var other *Try                 // the first failure that wasn't an allowance run out
-	var forbade []forbidden        // the plain 403s rested so far (forbiddenAlike)
-	autoReset := resetFirst != nil // a Codex or Claude reset looked at, once a request
+	var other *Try                    // the first failure that wasn't an allowance run out
+	var forbade []forbidden           // the plain 403s rested so far (forbiddenAlike)
+	autoReset := resetFirst != nil    // a Codex or Claude reset looked at, once a request
+	creditsAsked := map[string]bool{} // Codex accounts asked again onto their credits, once each (creditsAgain)
+	// the subscription/model pairs an account refused as a model it doesn't
+	// serve, for the accounts whose own list lacks it to be asked next
+	// (unlistedNext); none for a request pinned to an account, a
+	// conversation sealed to one or kept strictly on one
+	unservedBy := map[string]bool{}
+	unlisted, unlistedW := pl.unlisted, pl.unlistedW
+	if pin != "" || checkpoint != nil || aff.Why == "strict" {
+		unlisted, unlistedW = nil, nil
+	}
 	// what the tries' held streams sent the agent ahead of a reply (#751)
 	kept := &keptAlive{proto: from, told: start}
 	if k := handedOnOf(r); k != nil {
@@ -2839,7 +2888,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		wentTier = at.tier
 		ended = time.Now()
 		try := Try{ID: c.rest, Model: c.model, Effort: wentAt, Picked: picked, Fixed: fixed, RuleEffort: ruled, Fast: fast, Start: began, Done: true, Status: call.Status, Millis: ended.Sub(began).Milliseconds(), Error: call.Error, Queued: queued,
-			Served: call.Usage.Served, Upstream: call.Usage.Upstream, Tier: wentTier, TierServed: call.Usage.Tier, Auto: autoPicked(),
+			Served: call.Usage.Served, Upstream: call.Usage.Upstream, Pin: c.p.ClinePassAsked(c.model), Tier: wentTier, TierServed: call.Usage.Tier, Auto: autoPicked(),
 			Net: nt.timing(began, queued)}
 		if resetFirst != nil {
 			// the reset spent for it before it was asked
@@ -3022,7 +3071,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 					ProviderKeyID: providerKeyID, ProviderKeyName: providerKeyName, ProviderAccount: providerAccount,
 					Requested: call.Model, Served: call.Usage.Served, Upstream: call.Usage.Upstream,
 					Input: call.Usage.billed().Input, Output: call.Usage.billed().Output, CacheRead: call.Usage.billed().CacheRead,
-					CacheWrite: call.Usage.billed().CacheWrite, CacheWrite1h: call.Usage.billed().CacheWrite1h, Reasoning: call.Usage.billed().Reasoning, Credits: call.Usage.Credits, Effort: wentAt, Millis: try.Millis, Status: call.Status,
+					CacheWrite: call.Usage.billed().CacheWrite, CacheWrite1h: call.Usage.billed().CacheWrite1h, CacheUnknown: call.Usage.billed().cacheNotCounted(), Reasoning: call.Usage.billed().Reasoning, Credits: call.Usage.Credits, Effort: wentAt, Millis: try.Millis, Status: call.Status,
 					TierAsked: tierAsked, TierSent: wentTier, TierServed: call.Usage.Tier,
 					TTFT: try.TTFT, FirstText: try.FirstText, FirstReasoning: try.FirstReasoning, ReasoningHidden: try.ReasoningHidden, Flow: try.Flow, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Kind: call.Kind,
 					RequestID: call.Usage.RequestID, Endpoint: endpointOf(r, from, call.To, c.p, c.model), Archive: call.archiveName(), HandedOn: true}
@@ -3066,7 +3115,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 					ProviderKeyID: providerKeyID, ProviderKeyName: providerKeyName, ProviderAccount: providerAccount,
 					Requested: call.Model, Served: call.Usage.Served,
 					Input: call.Usage.billed().Input, Output: call.Usage.billed().Output, CacheRead: call.Usage.billed().CacheRead,
-					CacheWrite: call.Usage.billed().CacheWrite, CacheWrite1h: call.Usage.billed().CacheWrite1h, Reasoning: call.Usage.billed().Reasoning, Credits: call.Usage.Credits, Effort: wentAt, Millis: try.Millis, Status: call.Status,
+					CacheWrite: call.Usage.billed().CacheWrite, CacheWrite1h: call.Usage.billed().CacheWrite1h, CacheUnknown: call.Usage.billed().cacheNotCounted(), Reasoning: call.Usage.billed().Reasoning, Credits: call.Usage.Credits, Effort: wentAt, Millis: try.Millis, Status: call.Status,
 					TierAsked: tierAsked, TierSent: wentTier, TierServed: call.Usage.Tier,
 					TTFT: try.TTFT, FirstText: try.FirstText, FirstReasoning: try.FirstReasoning, ReasoningHidden: try.ReasoningHidden, Flow: try.Flow, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Kind: call.Kind,
 					RequestID: call.Usage.RequestID, Endpoint: endpointOf(r, from, call.To, c.p, c.model), Archive: call.archiveName(), HandedOn: true}
@@ -3315,6 +3364,57 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				skipped = append(skipped, c.label()+": "+call.Error)
 				matesLast(cands[i+1:], c)
 				continue
+			}
+		}
+		if hw.failed() && !hw.passing && !hw.turnedAway && !hw.refused && !creditsAsked[c.rest] && creditsAgain(c, hw.code(), hw.errBody()) {
+			// a Codex account that holds credits, refused as out of its
+			// allowance: ChatGPT may turn away the turn that uses the
+			// window up before it spends the credits, and answers the
+			// next on them (Zhenzhen on Discord: the running session
+			// ended "usage exhausted" while a new one answered). It is
+			// asked again at once, once a request, rather than the turn
+			// moved off it or ended
+			creditsAsked[c.rest] = true
+			try.Fail, try.Credits = failQuota, true
+			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+			skipped = append(skipped, c.label()+": "+call.Error+" (asked again, to spend its credits)")
+			i--
+			continue
+		}
+		if hw.failed() && !hw.passing && len(unlisted) > 0 && unservedTry(c, hw.code(), hw.errBody()) {
+			unservedBy[c.p.ID+"/"+c.model] = true
+		}
+		if key := c.p.ID + "/" + c.model; unservedBy[key] && hw.failed() && !hw.passing && !hw.turnedAway && !hw.refused && !outgrew &&
+			!slices.ContainsFunc(cands[i+1:], func(x candidate) bool { return x.p.ID+"/"+x.model == key }) {
+			// every account of the subscription that lists the model has
+			// been asked, and one refused it as a model it doesn't serve:
+			// its accounts whose own list lacks it are asked next, before
+			// any other member, as a list fetched before the account was
+			// given the model is stale (01huadalang on Discord: Gemini 4
+			// on one Antigravity account of several), rather than the
+			// agent told the first one's error. The one that refused
+			// rests, for that model alone
+			var next []candidate
+			var nextW []Weighed
+			next, nextW, unlisted, unlistedW = unlistedNext(unlisted, unlistedW, key)
+			if len(next) > 0 && last {
+				if f := failure(hw.code(), hw.errBody()); other == nil && f != failQuota && f != failCredit {
+					other = &Try{Status: call.Status, Error: call.Error}
+				}
+				rest := s.restAfterMarked(c, hw.code(), hw.header, hw.errBody(), hw.sharedPool)
+				try.Fail, try.Rest = rest.Why, &rest
+				s.trace.update(tr, func(t *Route) {
+					t.Tries[len(t.Tries)-1] = try
+					t.Order, t.Left = askUnlisted(t.Order, t.Left, c, nextW)
+				})
+				skipped = append(skipped, c.label()+": "+call.Error)
+				cands = append(cands[:len(cands):len(cands)], next...)
+				continue
+			}
+			if len(next) > 0 {
+				// the rest of the order after them; this try is rested below
+				cands = slices.Concat(cands[:i+1], next, cands[i+1:])
+				s.trace.update(tr, func(t *Route) { t.Order, t.Left = askUnlisted(t.Order, t.Left, c, nextW) })
 			}
 		}
 		if !last && hw.failed() {
@@ -3626,7 +3726,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			ProviderKeyID: providerKeyID, ProviderKeyName: providerKeyName, ProviderAccount: providerAccount,
 			Requested: call.Model, Served: call.Usage.Served, Upstream: call.Usage.Upstream,
 			Input: call.Usage.billed().Input, Output: call.Usage.billed().Output, CacheRead: call.Usage.billed().CacheRead,
-			CacheWrite: call.Usage.billed().CacheWrite, CacheWrite1h: call.Usage.billed().CacheWrite1h, Reasoning: call.Usage.billed().Reasoning, Credits: call.Usage.Credits, Effort: wentAt, Millis: call.Millis, Status: call.Status,
+			CacheWrite: call.Usage.billed().CacheWrite, CacheWrite1h: call.Usage.billed().CacheWrite1h, CacheUnknown: call.Usage.billed().cacheNotCounted(), Reasoning: call.Usage.billed().Reasoning, Credits: call.Usage.Credits, Effort: wentAt, Millis: call.Millis, Status: call.Status,
 			TierAsked: tierAsked, TierSent: wentTier, TierServed: call.Usage.Tier,
 			TTFT: call.TTFT, FirstText: call.FirstText, FirstReasoning: call.FirstReasoning, ReasoningHidden: call.ReasoningHidden, Flow: call.Flow, Sent: sentMs, Own: ownMs, Retried: retriedMs, Queued: queuedMs, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Kind: call.Kind,
 			RequestID: call.Usage.RequestID, ResponseID: call.Usage.ResponseID, Endpoint: endpointOf(r, from, call.To, lastTried, model), Stop: call.Usage.Stop, Archive: call.archiveName()}
@@ -3937,6 +4037,11 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 	body = kimiLockedSampling(p, to, body)
 	body = clinePin(p, to, body)
 	body = codexImagesFit(p, to, body)
+	if to == provider.Responses && !keepsAccessPrograms(p, in) {
+		// Codex's Cyber program, relayed or built, goes to OpenAI alone
+		// (#3172); before the user's own fields, which may name one
+		body = withoutAccessPrograms(body)
+	}
 	if to == provider.Gemini && !p.FactoryGemini() {
 		// the model is in a Gemini API's and Vertex AI's path
 		// (upstreamPath), as Google's own SDK asks it; Factory's generate
@@ -3996,10 +4101,13 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		m := gjson.GetBytes(body, "model").String()
 		base = provider.MantleBase(base, m, !s.fits(p.ID, mantleRouteKey(m), to))
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, nil)
 	if err != nil {
 		return nil, err
 	}
+	// the body goes once it is answered, not when a stream ends (#3383)
+	provider.SetBody(req, body)
+	defer provider.LetGo(req)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	// magpie's, or the agent's own where the provider is set to pass it
@@ -4038,7 +4146,12 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		// magpie never does. A test asked as Codex asks with them
 		// (provider.TestAs)
 		seen := http.Header{}
+		lite := liteKept(p, to, true)
 		for k, vs := range in {
+			if !lite && strings.EqualFold(k, liteHeader) {
+				// the body left Lite (fromLite), so does its header
+				continue
+			}
 			if codexClientHeader(k) {
 				req.Header[k] = slices.Clone(vs)
 				seen[k] = vs
@@ -4215,10 +4328,11 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			// for other backends (#1758)
 			break
 		}
-		// Responses Lite's tools, as an input item, go as OpenAI takes them
-		// only to OpenAI (#350)
-		if (p.Account == nil || p.Account.Agent != "codex") && !strings.HasSuffix(p.Host(), "openai.com") {
-			body = liftAdditionalTools(body)
+		// Responses Lite's shape, its tools as an input item (#350) and its
+		// reasoning context, goes only to OpenAI; anyone else is sent what
+		// Codex sends a model that isn't Lite
+		if !liteKept(p, proto, fromCodex(r.Header)) {
+			body = fromLite(body)
 		}
 		// only the ChatGPT backend runs Codex's tool search as Codex sends it
 		if p.Account == nil || p.Account.Agent != "codex" {
@@ -4392,6 +4506,11 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	if !s.fits(p.ID, toolStrictRefused, proto) {
 		body, _ = withoutToolStrict(proto, body)
 	}
+	// a stub for each tool the history called and tools lacks, to an
+	// upstream that turned such a call away before (undeclared_tools.go)
+	if !s.fits(p.ID, historyToolsRefused, proto) {
+		body, _, _ = withHistoryTools(proto, body)
+	}
 	// structured output an upstream turned away before (#2126): a schema
 	// as any JSON object, or the format told in the system prompt alone
 	if !s.fits(p.ID, formatRefused(model), proto) {
@@ -4440,6 +4559,24 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		}
 		if res.StatusCode < 400 {
 			s.markUnfit(p.ID, mark, proto)
+		}
+	}
+	// a history call to a tool the request doesn't declare, or calls with
+	// no tools, turned away (pi's and T3 Code's tool_search,
+	// undeclared_tools.go): asked once more with a stub declared for each
+	// such tool, and so from then on
+	if badRequest(res.StatusCode) && s.fits(p.ID, historyToolsRefused, proto) {
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		res.Body = io.NopCloser(bytes.NewReader(b))
+		if nb, names, toolless := withHistoryTools(proto, body); len(names) > 0 && refusesHistoryTools(b, names, toolless) {
+			body = nb
+			if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
+				return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
+			}
+			if res.StatusCode < 400 {
+				s.markUnfit(p.ID, historyToolsRefused, proto)
+			}
 		}
 	}
 	// a vendor that turns away the fields it doesn't know (Mistral's
@@ -5100,6 +5237,10 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			r := *req
 			r.LoadedInPlace, req = want, &r
 		}
+		if req.OwnEffort && req.Effort != "" && !s.fits(p.ID, ownEffortField(model), to) {
+			r := *req
+			r.Effort, req = "", &r
+		}
 		if offEffort(req.Effort) && !s.fits(p.ID, offRefused(model), to) {
 			r := *req
 			r.Effort, req = onEffort(p, model), &r
@@ -5227,6 +5368,12 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			// the other magpie searches for it (search_remote.go)
 			body = withFields(body, map[string]any{"web_search_options": map[string]any{}})
 		}
+		if !s.fits(p.ID, historyToolsRefused, to) {
+			// a stub for each tool the history called and tools lacks,
+			// to an upstream that turned such a call away before
+			// (undeclared_tools.go)
+			body, _, _ = withHistoryTools(to, body)
+		}
 		if to == provider.CodeAssist && p.Account != nil {
 			// the envelope is named in there, where the id it carries is
 			// known: on Antigravity that is the variant the effort picked,
@@ -5323,6 +5470,16 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			s.markUnfit(p.ID, thinkingConfigField, to)
 			continue
 		}
+		if badRequest(res.StatusCode) && s.fits(p.ID, historyToolsRefused, to) {
+			if _, names, toolless := withHistoryTools(to, body); len(names) > 0 && refusesHistoryTools(b, names, toolless) {
+				// a history call to a tool the request doesn't declare,
+				// or calls with no tools, turned away (pi's and T3 Code's
+				// tool_search): asked again with a stub declared for each
+				// such tool, and so from then on
+				s.markUnfit(p.ID, historyToolsRefused, to)
+				continue
+			}
+		}
 		if badRequest(res.StatusCode) && rootUnionRefusal.Match(b) && s.fits(p.ID, rootUnionRefused(model), to) {
 			if _, changed := objectRootsReq(req); changed {
 				// a tool's parameters refused for a union at their root
@@ -5372,6 +5529,24 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			} else {
 				r := *req
 				r.Effort, req = onEffort(p, model), &r
+				continue
+			}
+		}
+		if req.OwnEffort {
+			if refused, value := ownEffortRefused(res.StatusCode, b, req.Effort); refused {
+				// the effort magpie added for auto mode's classifier
+				// (fitAutoModeClassifier) turned away: none, by a model
+				// that reasons, is asked again at low; any other refusal,
+				// the field's, without it, as before. Remembered either way
+				r := *req
+				if value && offEffort(req.Effort) {
+					s.markUnfit(p.ID, offRefused(model), to)
+					r.Effort = onEffort(p, model)
+				} else {
+					s.markUnfit(p.ID, ownEffortField(model), to)
+					r.Effort = ""
+				}
+				req = &r
 				continue
 			}
 		}
@@ -6528,7 +6703,7 @@ func conversationID(in http.Header, body []byte) string {
 		Contents json.RawMessage `json:"contents"`
 	}
 	// An undecodable body still gets an id: the hash of the whole body.
-	_ = decodeJSON(body, &m)
+	_ = decodeJSONView(body, &m)
 	// The turns are the body's own bytes, not a copy of each: this runs on
 	// every request, and a 1.5 MB conversation's copy was ~2.8 MB of each
 	// request's allocations (yg6888 on X).
@@ -6549,7 +6724,7 @@ func conversationID(in http.Header, body []byte) string {
 			Role string `json:"role"`
 		}
 		// Gemini treats an omitted role as user; Chat and Responses do not.
-		if decodeJSON(it, &r) == nil && (r.Role == "user" || (geminiContents && r.Role == "")) {
+		if decodeJSONView(it, &r) == nil && (r.Role == "user" || (geminiContents && r.Role == "")) {
 			first = it
 			break
 		}
@@ -6559,6 +6734,67 @@ func conversationID(in http.Header, body []byte) string {
 	}
 	sum := sha256.Sum256(first)
 	return "magpie-" + hex.EncodeToString(sum[:12])
+}
+
+// offSpelled is a client's effort spelled "off", which no OpenAI API
+// takes: a client asking reasoning off by that word (plugins#334, raw
+// reasoning_effort "off" to a Command Code DeepSeek fell back to its lowest
+// level and still thought).
+func offSpelled(e string) bool { return strings.EqualFold(strings.TrimSpace(e), "off") }
+
+// offAsNone is a Chat or Responses body asking reasoning "off"
+// (reasoning_effort, or reasoning.effort) asking for magpie's own off
+// level, none, instead: what every check and route reads the effort by,
+// and what fitEffort fits to the model's own off level, or its least
+// where it has none, as "none" asked is. A body with no such field goes
+// as it came.
+func offAsNone(from provider.Protocol, body []byte) []byte {
+	if from != provider.Chat && from != provider.Responses || !saysOff(body) {
+		return body
+	}
+	var v struct {
+		ReasoningEffort *string                    `json:"reasoning_effort"`
+		Reasoning       map[string]json.RawMessage `json:"reasoning"`
+	}
+	if decodeJSON(body, &v) != nil {
+		return body
+	}
+	fields := map[string]any{}
+	var e string
+	if v.ReasoningEffort != nil && offSpelled(*v.ReasoningEffort) {
+		fields["reasoning_effort"] = "none"
+	}
+	if decodeJSON(v.Reasoning["effort"], &e) == nil && offSpelled(e) {
+		v.Reasoning["effort"] = json.RawMessage(`"none"`)
+		fields["reasoning"] = v.Reasoning
+	}
+	if len(fields) == 0 {
+		return body
+	}
+	return withFields(body, fields)
+}
+
+// saysOff is whether body has an effort field valued "off" anywhere,
+// looked for without parsing it: serve looks at every request's body,
+// however large, and only one naming off is parsed (offAsNone).
+func saysOff(body []byte) bool {
+	key := []byte(`effort"`)
+	for rest := body; ; {
+		i := bytes.Index(rest, key)
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len(key):]
+		v := bytes.TrimLeft(rest, " \t\r\n")
+		if v, ok := bytes.CutPrefix(v, []byte(":")); ok {
+			v = bytes.TrimLeft(v, " \t\r\n")
+			if s, ok := bytes.CutPrefix(v, []byte(`"`)); ok {
+				if j := bytes.IndexByte(s, '"'); j >= 0 && offSpelled(string(s[:j])) {
+					return true
+				}
+			}
+		}
+	}
 }
 
 // offEffort is an effort turning reasoning off, or as near off as asked.

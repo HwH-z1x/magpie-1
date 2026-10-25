@@ -44,6 +44,13 @@ type githubFixture struct {
 	// contentsLimit is the largest file the Contents API's PUT takes;
 	// GitHub answers 422 "too large" over its own (undocumented) limit.
 	contentsLimit int
+	// blobLimit is the largest blob one POST takes. GitHub documents no
+	// request size; it refused a 50.8 MB blob (about 68 MB of base64 body)
+	// with 422 "Sorry, your input was too large to process" (Discord),
+	// and took a 19 MB file's Contents PUT (about 25 MB of body).
+	blobLimit int
+	// biggestBlob is the largest blob a POST sent.
+	biggestBlob int
 	// beforeRef runs, under the lock, before a ref update is judged: a
 	// test commits there as another computer would.
 	beforeRef func()
@@ -118,7 +125,7 @@ func githubSHA(b []byte) string {
 func newGithubFixture(t *testing.T) *githubFixture {
 	t.Helper()
 	f := &githubFixture{objects: map[string][]byte{}, defaultBranch: "main", heads: map[string]string{},
-		blobs: map[string][]byte{}, trees: map[string]fixtureTree{}, commits: map[string]fixtureCommit{}, contentsLimit: 1 << 20}
+		blobs: map[string][]byte{}, trees: map[string]fixtureTree{}, commits: map[string]fixtureCommit{}, contentsLimit: 1 << 20, blobLimit: 24 << 20}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	target, _ := url.Parse(srv.URL)
@@ -176,11 +183,17 @@ func (f *githubFixture) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.URL.Path, base+"/git/blobs/") {
 		sha := strings.TrimPrefix(r.URL.Path, base+"/git/blobs/")
-		for _, b := range f.objects {
-			if githubSHA(b) == sha && r.Header.Get("Accept") == "application/vnd.github.raw+json" {
-				w.Write(b)
-				return
+		// GitHub serves any blob the repository has by its SHA, one a
+		// later commit no longer holds too.
+		b, ok := f.blobs[sha]
+		for _, o := range f.objects {
+			if !ok && githubSHA(o) == sha {
+				b, ok = o, true
 			}
+		}
+		if ok && r.Header.Get("Accept") == "application/vnd.github.raw+json" {
+			w.Write(b)
+			return
 		}
 		fail(404, "Not Found")
 		return
@@ -291,6 +304,11 @@ func (f *githubFixture) serveGit(w http.ResponseWriter, r *http.Request, base st
 			fail(422, "Invalid blob")
 			return true
 		}
+		if len(b) > f.blobLimit {
+			fail(422, "Sorry, your input was too large to process. Consider creating the blob in a local clone of the repository and then pushing it to GitHub.")
+			return true
+		}
+		f.biggestBlob = max(f.biggestBlob, len(b))
 		f.blobs[githubSHA(b)] = b
 		send(201, map[string]string{"sha": githubSHA(b)})
 	case strings.HasPrefix(rest, "commits/") && r.Method == http.MethodGet:
@@ -769,7 +787,7 @@ func TestGitHubPublicRepositoryRefused(t *testing.T) {
 // is read back by its blob SHA.
 func TestGitHubLargeBackup(t *testing.T) {
 	f := newGithubFixture(t)
-	f.contentsLimit = 19 << 20
+	f.contentsLimit = 10 << 20
 	g, err := newGitHub(githubConfig())
 	if err != nil {
 		t.Fatal(err)
@@ -780,14 +798,14 @@ func TestGitHubLargeBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	large := make([]byte, 21<<20)
+	large := make([]byte, 15<<20) // over the Contents API's, under githubPart
 	for i := range large {
 		large[i] = byte(i*7919 + i>>11)
 	}
 	before := f.writes
 	v, err = g.put(ctx, large, v.ETag)
 	if err != nil {
-		t.Fatalf("a 21 MB backup: %v", err)
+		t.Fatalf("a 15 MB backup: %v", err)
 	}
 	if v.ETag != githubSHA(large) || f.writes != before+1 {
 		t.Fatalf("one commit per update, versioned by the blob: %+v, commits %d", v, f.writes-before)
@@ -797,7 +815,7 @@ func TestGitHubLargeBackup(t *testing.T) {
 	}
 	b, got, err := g.get(ctx, version{})
 	if err != nil || got != v || !bytesEqual(b, large) {
-		t.Fatalf("reading the 21 MB backup back: size %d, %+v, %v", len(b), got, err)
+		t.Fatalf("reading the 15 MB backup back: size %d, %+v, %v", len(b), got, err)
 	}
 	if !slices.Contains(f.requests, "GET /repos/alice/private/git/blobs/"+v.ETag) {
 		t.Fatal("a file over 1 MB must be downloaded by its blob SHA")

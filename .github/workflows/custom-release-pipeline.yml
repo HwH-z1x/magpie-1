@@ -92,4 +92,5 @@ jobs:
           path: |
             dist/
             ${{ runner.temp }}/request-intent-state.json
+            ${{ runner.temp }}/request-intent-state.integration.txt
           if-no-files-found: ignore

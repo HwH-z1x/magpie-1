@@ -49,6 +49,7 @@ func TestClinePluginPinsDeepSeekAndGLM(t *testing.T) {
 		mu.Lock()
 		sent = nil
 		mu.Unlock()
+		tries, last := 0, []int{}
 		for _, req := range []struct{ path, body string }{
 			{"/v1/chat/completions", `{"model":"` + pid + `/deepseek-v4-pro","messages":[{"role":"user","content":"hi"}]}`},
 			{"/v1/messages", `{"model":"` + pid + `/deepseek-v4-pro","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`},
@@ -57,14 +58,36 @@ func TestClinePluginPinsDeepSeekAndGLM(t *testing.T) {
 			{"/v1/chat/completions", `{"model":"` + pid + `/fake-1","messages":[{"role":"user","content":"hi"}]}`},
 			{"/v1/chat/completions", `{"model":"` + pid + `/glm-5.3-flash","messages":[{"role":"user","content":"hi"}]}`},
 		} {
-			postProto(t, New(), req.path, req.body)
+			// each ask is one request, unless magpie tried it again: then
+			// it says why, and a try the vendor answered is never sent twice
+			rt := postProto(t, New(), req.path, req.body)
+			tries += len(rt.Tries)
+			mu.Lock()
+			last = append(last, len(sent)-1)
+			mu.Unlock()
+			for i, try := range rt.Tries {
+				if i > 0 {
+					t.Logf("%s %s: tried again after %d %q", req.path, req.body, rt.Tries[i-1].Status, rt.Tries[i-1].Error)
+				}
+				if try.Status == 200 && i < len(rt.Tries)-1 {
+					t.Fatalf("%s %s: a try the vendor answered 200 was sent again: %+v", req.path, req.body, rt.Tries)
+				}
+			}
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if len(sent) != 6 {
-			t.Fatalf("the plugin sent %d requests", len(sent))
+		if len(sent) != tries {
+			t.Fatalf("the plugin sent %d requests for 6 asks tried %d times", len(sent), tries)
 		}
-		return append([]map[string]any(nil), sent...)
+		// each ask's request as it last went
+		var got []map[string]any
+		for n, i := range last {
+			if i < 0 || (n > 0 && i == last[n-1]) {
+				t.Fatalf("ask %d reached the plugin's vendor with no request", n)
+			}
+			got = append(got, sent[i])
+		}
+		return got
 	}
 	for i, q := range ask() {
 		if q["providerOptions"] != nil {
@@ -82,6 +105,21 @@ func TestClinePluginPinsDeepSeekAndGLM(t *testing.T) {
 	}
 	if p, err = provider.Find(pid); err != nil || !p.PinUpstream {
 		t.Fatalf("the tick wasn't kept: %+v, %v", p, err)
+	}
+	// ClinePass's own DeepSeek models the plugin pins itself, with the
+	// has filter that holds them on DeepSeek and a way back (0.1.11), and
+	// it keeps a body's own providerOptions: magpie's only alone would
+	// take the plugin's place, so the tick leaves them to it
+	for _, m := range []string{"cline-pass/deepseek-v4-pro", "cline-pass/deepseek-v4.1-flash", "cline-pass/deepseek-v4.1-flash-1017"} {
+		if up, _ := p.ClinePin(m); up != "" {
+			t.Errorf("%s: magpie pinned it to %q ahead of the plugin", m, up)
+		}
+		if has := p.ClinePassHas(m, true); has != nil {
+			t.Errorf("%s: magpie sent has %v ahead of the plugin", m, has)
+		}
+	}
+	if up, _ := p.ClinePin("cline-pass/glm-5.3"); up != "zai" {
+		t.Errorf("cline-pass/glm-5.3: pinned to %q, want zai", up)
 	}
 	got := ask()
 	for i, q := range got[:4] {

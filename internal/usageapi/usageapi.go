@@ -6,11 +6,13 @@ package usageapi
 
 import (
 	"cmp"
+	"net/http"
 	"net/url"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
@@ -73,7 +75,28 @@ const PageSessions = 100
 // Usage page asks for: over a long history (Vantiboo1ean, ~750k requests)
 // State sent the page every one of ~84k sessions (22 MB) and worked the
 // summary out again for each refresh.
-func Page(p usage.Period) Usage { return stateOf(usage.SummarizeTop(p, PageSessions)) }
+func Page(p usage.Period) Usage { return PageIn(p, nil) }
+
+// PageIn is Page with the period's days and the chart's hours in zone, the
+// reader's (ZoneOf); nil is this computer's.
+func PageIn(p usage.Period, zone *time.Location) Usage {
+	return stateOf(usage.SummarizeTopIn(p, PageSessions, zone))
+}
+
+// ZoneOf is the reader's time zone, which the Usage page names in ?tz= (its
+// browser's IANA name, as Intl gives it) for its days and hours to be the
+// reader's: magpie web may be read from another zone than the computer's
+// (Outvi V on Discord). This computer's when it names none or one unknown
+// here.
+func ZoneOf(r *http.Request) *time.Location { return usage.Zone(r.URL.Query().Get("tz")) }
+
+// FilterIn is FilterOf with the reader's zone, ZoneOf(r), which its Day and
+// the period's days are read in.
+func FilterIn(r *http.Request) usage.Filter {
+	f := FilterOf(r.URL.Query())
+	f.Zone = ZoneOf(r)
+	return f
+}
 
 func stateOf(s usage.Summary) Usage {
 	out := Usage{Summary: s, Agents: []Group{}, Models: []Group{}, Accounts: []Group{}, Path: Tilde(usage.Path())}

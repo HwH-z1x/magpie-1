@@ -109,6 +109,10 @@ type updateJSON struct {
 	Busy    *gateway.Busy `json:"busy,omitempty"`
 	Waiting bool          `json:"waiting,omitempty"`
 	GaveUp  bool          `json:"gaveUp,omitempty"`
+	// Handover, the restart hands the gateway to the new version
+	// (handover.go): Busy is then the Claude subscription's turns alone,
+	// every other request finishing as the new version takes the next
+	Handover bool `json:"handover,omitempty"`
 }
 
 var updates = &updater{}
@@ -472,7 +476,7 @@ func (u *updater) jsonIn(lang string) updateJSON {
 	if update.CustomBuild() && !update.CustomUpdates(Version) {
 		return updateJSON{State: "custom", Current: Version, URL: update.CustomUpdateGuide}
 	}
-	busy := gatewayBusy()
+	busy, handover := restartBusy(), handsOver()
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if lang != "" {
@@ -510,6 +514,7 @@ func (u *updater) jsonIn(lang string) updateJSON {
 	}
 	if j.State == "ready" || u.waiting {
 		j.Waiting, j.GaveUp = u.waiting, u.gaveUp && !u.waiting
+		j.Handover = handover
 		if busy.Any() {
 			j.Busy = &busy
 		}
@@ -616,7 +621,7 @@ func updateRoutes(mux *http.ServeMux, w Windows) {
 			if in.When != "now" && !updates.idle() {
 				updates.waitIdle(func() bool {
 					if restartToUpdate(isWeb(w), in.View != "" || mainShown(w), in.View) {
-						go w.Quit()
+						go leave(w.Quit)
 						return true
 					}
 					return false
@@ -631,7 +636,7 @@ func updateRoutes(mux *http.ServeMux, w Windows) {
 		case j.State == "ready":
 			if restartToUpdate(isWeb(w), in.View != "" || mainShown(w), in.View) {
 				rw.WriteHeader(http.StatusNoContent)
-				go w.Quit()
+				go leave(w.Quit)
 				return
 			}
 		case j.State == "error" && j.Retry, j.State == "found":
@@ -661,6 +666,9 @@ func restartToUpdate(web, window bool, view string) bool {
 // (#2096), and the Mac's new one too opens only its menu bar icon when no
 // window was up, rather than putting up one the user had closed.
 func restartInto(web, window bool, view string, bySelf bool) bool {
+	if pending.Load() != nil {
+		return false // a handover under way restarts already
+	}
 	bundle, exe := updates.bundle, updates.exe
 	updates.mu.Lock()
 	version := ""
@@ -674,6 +682,12 @@ func restartInto(web, window bool, view string, bySelf bool) bool {
 	updatedInApp(version) // its first start leaves the notes to Settings (#525)
 	if web {
 		webReexec.Store(true)
+		return true
+	}
+	// on a Mac or Linux the new version takes the gateway over while this
+	// one finishes its requests (handover.go)
+	if bundle != "" && beginHandover(bundle, "", window || !bySelf, "") ||
+		bundle == "" && beginHandover("", exe, window, view) {
 		return true
 	}
 	var err error

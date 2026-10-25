@@ -688,7 +688,8 @@ func addCmd(p provider.Provider) tea.Cmd {
 
 // endpointAsk asks for the address of a vendor reached at the user's own
 // (pr.Endpoint is its example): a remote magpie's, as the other
-// computer's magpie shows it in Settings, under Share on local network.
+// computer's magpie shows it in Settings → Network and sharing, under
+// Share on local network.
 // Nothing typed is said to be needed, as the app's editor says it.
 func endpointAsk(pr provider.PresetDef, crumbs []string, now string, then func(string) tea.Cmd) ask {
 	in := newInput(pr.Endpoint)
@@ -776,6 +777,10 @@ func (m model) viewProviders() string {
 		}
 		r.models = fmt.Sprintf("%d models", len(p.Exposed()))
 		var notes []string
+		if p.Off {
+			// how to switch it on again, as magpie providers says it
+			notes = append(notes, "o switches it on")
+		}
 		if v, ok := m.bal[p.ID]; ok {
 			notes = append(notes, v)
 		}
@@ -947,6 +952,13 @@ func checkinWords(r provider.WorkBuddyCheckin) string {
 		who = "WorkBuddy"
 	}
 	switch r.Outcome {
+	case provider.CheckinDone, provider.CheckinInactive, provider.CheckinIneligible:
+		if r.Again {
+			// maybe the vendor's day before (#3326)
+			return who + ": " + againWords(r) + checkinWhy(r)
+		}
+	}
+	switch r.Outcome {
 	case provider.CheckinClaimed, provider.CheckinDone:
 		s := who + " checked in today"
 		if r.Credit > 0 {
@@ -960,9 +972,9 @@ func checkinWords(r provider.WorkBuddyCheckin) string {
 		}
 		return s
 	case provider.CheckinIneligible:
-		return who + " isn't eligible for the check-in"
+		return who + " isn't eligible for the check-in" + checkinWhy(r)
 	case provider.CheckinInactive:
-		return who + ": no check-in event now"
+		return who + ": no check-in event now" + checkinWhy(r)
 	case provider.CheckinCaptcha:
 		return who + " asks for a captcha: check in in its own app"
 	case provider.CheckinOwnApp:
@@ -973,6 +985,31 @@ func checkinWords(r provider.WorkBuddyCheckin) string {
 		msg = "no answer"
 	}
 	return who + " couldn't check in: " + msg
+}
+
+// checkinWhy is why an inactive or ineligible check-in had nothing to
+// claim, in the vendor's or plugin's own words, set after its label: a
+// bare "no check-in event now" left the user guessing (plugins#304).
+func checkinWhy(r provider.WorkBuddyCheckin) string {
+	switch r.Outcome {
+	case provider.CheckinInactive, provider.CheckinIneligible:
+		if m := strings.TrimSpace(r.Msg); m != "" {
+			return " · " + m
+		}
+	}
+	return ""
+}
+
+// againWords is a provisional answer (WorkBuddyCheckin.Again) in words:
+// it may be the vendor's day before, so magpie asks again later (#3326).
+func againWords(r provider.WorkBuddyCheckin) string {
+	switch r.Outcome {
+	case provider.CheckinDone:
+		return "says already checked in · its day may not have turned, magpie asks again later"
+	case provider.CheckinIneligible:
+		return "not eligible now · magpie asks again later"
+	}
+	return "no check-in event now · magpie asks again later"
 }
 
 // ownAppName is the vendor whose own app alone gets r's check-in credits.
@@ -999,6 +1036,15 @@ func ownAppWords(r provider.WorkBuddyCheckin) string {
 	return name + " only gives check-in credits to its own app; check in in the " + name + " app"
 }
 
+// whyHint points an inactive or ineligible check-in's line to c when its
+// answer says why: c asks again and says the reason.
+func whyHint(r provider.WorkBuddyCheckin) string {
+	if checkinWhy(r) == "" {
+		return ""
+	}
+	return " · c says why"
+}
+
 // checkinCell is a WorkBuddy (China) or Trae CN account's check-in on its
 // line: today's
 // done, with the credits, or not yet; empty for an account without one.
@@ -1010,6 +1056,10 @@ func checkinCell(q provider.SubscriptionQuota, now time.Time) string {
 	if r == nil || r.Day != provider.CheckinDay(now) {
 		return sMuted.Render("签到 not yet today · c")
 	}
+	if r.Again && r.Outcome == provider.CheckinDone {
+		// "already in" that may be the vendor's day before (#3326)
+		return sMuted.Render("签到 said already · asked again later · c")
+	}
 	switch r.Outcome {
 	case provider.CheckinClaimed, provider.CheckinDone:
 		s := sOK.Render("签到 ✓")
@@ -1020,10 +1070,12 @@ func checkinCell(q provider.SubscriptionQuota, now time.Time) string {
 			s += sFaint.Render(fmt.Sprintf(" · %d-day streak", r.Streak))
 		}
 		return s
+	// the reason is long (plugins#304): the line points to c, whose
+	// answer says it (checkinWords)
 	case provider.CheckinIneligible:
-		return sMuted.Render("签到 not eligible")
+		return sMuted.Render("签到 not eligible" + whyHint(*r))
 	case provider.CheckinInactive:
-		return sMuted.Render("签到 no event now")
+		return sMuted.Render("签到 no event now" + whyHint(*r))
 	case provider.CheckinCaptcha:
 		return sMuted.Render("签到 needs a captcha · check in in its app")
 	case provider.CheckinOwnApp:

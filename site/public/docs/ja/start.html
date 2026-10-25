@@ -49,6 +49,7 @@
     <a class="toc-only" href="/docs/ja/remote">リモート magpie</a>
     <a class="toc-only" href="/docs/ja/docker">Docker</a>
     <a class="toc-only" href="/docs/ja/privacy">プライバシー</a>
+    <a class="toc-only" href="/docs/ja/masking">プライバシーマスキング</a>
     <a href="/docs/ja/import">magpie に追加</a>
     <a href="/docs/integrate">アプリ連携</a>
     <a href="https://github.com/yetone/magpie-releases/releases">リリース</a>
@@ -192,7 +193,7 @@
       <li>ルールはターンの開始時に決まり、エージェントがツールの結果を返している間もそのターンは同じモデルに留まるため、ベンダーのキャッシュが途中で失われません。唯一の例外として、ターンがモデルのコンテキストを超えて大きくなった場合は、それを受け付けられるメンバーに移ります。</li>
       <li>トークン数は、リクエストのサイズから推定した値と、会話の直前のリクエストでベンダーが数えた値のうち、大きいほうを使います。余裕を持たせてください。200k のモデルなら、ルールは 199k ではなく 150k にします。</li>
       <li>サブエージェントはそれ自体が独立した会話なので、親のエージェントはそのままに、ルールでサブエージェントだけを別の送り先に送れます。</li>
-      <li>インテントは、ユーザーが求めていることを数語で表したものです（「テストを書く・直す」「ちょっとした質問」など）。ターンの開始時に、グループの分類モデル（magpie にある任意のモデル。小さく高速で推論なしのものが最適です）に、一致しうるインテントのうちユーザーのメッセージがどれに当たるかを一度だけ尋ねます。送られるのはそのメッセージだけで、会話全体ではありません。分類モデルが失敗した、遅すぎた（8 秒）、または判断できなかった場合は、どのインテントも一致せず、そのターンは他のルールに従います。インテントのないルールでいずれにせよ決まる場合は問い合わせず、同じメッセージについて二度尋ねることもありません。その呼び出しは使用量に magpie 自身の呼び出しとして表示されます。何を尋ねるのか、回答がどう使われるのか、失敗したらどうなるのかの詳細は<a href="/docs/ja/intent">インテントルーティング</a>を参照してください。</li>
+      <li>インテントは、ユーザーが求めていることを数語で表したものです（「テストを書く・直す」「ちょっとした質問」など）。ターンの開始時に、グループの分類モデル（magpie にある任意のモデル。小さく高速で推論なしのものが最適です）に、一致しうるインテントのうちユーザーのメッセージがどれに当たるかを一度だけ尋ねます。送られるのはそのメッセージだけで、会話全体ではありません。分類モデルが失敗した、設定したタイムアウトを超えた（既定は 8 秒。「設定 → モデル → 応答 → インテント判定のタイムアウト」で変更可能）、または判断できなかった場合は、どのインテントも一致せず、そのターンは他のルールに従います。インテントのないルールでいずれにせよ決まる場合は問い合わせず、同じメッセージについて二度尋ねることもありません。その呼び出しは使用量に magpie 自身の呼び出しとして表示されます。何を尋ねるのか、回答がどう使われるのか、失敗したらどうなるのかの詳細は<a href="/docs/ja/intent">インテントルーティング</a>を参照してください。</li>
       <li><span class="ui">compacting</span> は、エージェントが会話を圧縮するとき（Claude Code の <code>/compact</code> と自動圧縮、Codex、OpenCode、Pi、Gemini CLI、Qwen Code、Kimi Code）に一致します。これにより、会話は元のモデルのまま、要約だけをより安く速いモデルに書かせられます。圧縮は単独で判断されます。圧縮が起きたターンとそのキャッシュは元の送り先に留まります。会話がルールのモデルが受け付けられる長さを超えている場合は、次に一致するルール、またはグループの順序で決まります。</li>
       <li><b>時間帯と曜日。</b>ルールは、このコンピューターの時計で、特定の時間帯や曜日だけ有効にできます（ベンダーのピーク時間など）。その間のターンを別のモデルに送るルールでは、ベンダーのモデルはフォールバックとして後ろに残ります。完全に外すには、ルールの <span class="ui">⋯</span> メニューから <span class="ui">代わりにモデルを一時停止</span> を選びます。ルールが有効な間（時間帯、曜日、エージェント）、そのモデルはグループから外れ、先頭にもフォールバックにもならず、会話の継続でも使われません。時間帯が終われば戻ります。一時停止は時間帯、曜日、エージェントだけで判断し、グループのモデルがすべて一時停止中ならエージェントにそう伝えます。</li>
       <li><b>フォルダ。</b><span class="ui">フォルダ</span> は、エージェントの作業フォルダが指定したフォルダのどれか、またはその中にあるときに一致します。<code>~/work/acme</code> は <code>~/work/acme/web</code> を含み、<code>~/work/acme-old</code> は含みません。フォルダはエージェントがリクエストでモデルに伝えるもの（Claude Code、Codex、OpenCode、Pi が伝えます）なので、伝えないエージェントはフォルダのルールに一致しません。<code>~</code> はホームフォルダ、<code>C:\work</code> は WSL の <code>/mnt/c/work</code> と同じで、macOS と Windows では大文字小文字を区別しません。</li>
@@ -290,6 +291,28 @@ magpie claude group/opus-anywhere    <span class="c"># これを使う</span></p
 IP-CIDR6,::1/128,DIRECT,no-resolve</pre>
     </div>
     <p>Clash / mihomo の設定では、同じ行を <code>rules:</code> の下に、それぞれ先頭に <code>- </code> を付けて書きます。そのあと、エージェントからもう一度リクエストを送ってください。</p>
+    <h3 id="dsh-deepseek">DeepSeek Harness の DeepSeek 行をそのまま使い、magpie を通せますか？</h3>
+    <p>手で設定すればできます。dsh を接続すると magpie は自分のルートを足すだけで、dsh の DeepSeek 行（<code>llm-deepseek</code>）は dsh に任せます。この行は、セッションの途中でプロンプトやツールが変わっても DeepSeek のキャッシュを保ちます。magpie を通すには <code>~/.dsh/profiles/&lt;profile&gt;/cordis.patch.yml</code> に次を足します：</p>
+    <div class="code">
+      <span class="lang">cordis.patch.yml</span>
+      <button class="copy" data-copy="ex-dsh-deepseek">コピー</button>
+      <pre id="ex-dsh-deepseek">- id: llm-deepseek
+  config:
+    baseURL: http://127.0.0.1:3425
+    apiKeyEnv: MAGPIE_DS_KEY
+    maxInlineRequestImageBytes: 67108864
+    models:
+      - id: deepseek/deepseek-flash
+        name: DeepSeek V4.1 Flash (magpie)
+        contextWindow: 1000000
+        inputModalities: [text, image]
+        systemPromptUpdate: in-history
+        toolUpdate: addition-only
+      - id: deepseek/deepseek-v4-pro
+        name: DeepSeek V4 Pro (magpie)
+        contextWindow: 1000000</pre>
+    </div>
+    <p><code>baseURL</code> に <code>/anthropic</code> は付けません。モデル id は magpie のもの（<code>magpie models</code>）で、<code>models</code> を書くと dsh の既定の一覧が置き換わるので、更新方法の 2 行も残してください。<code>MAGPIE_DS_KEY</code> には DeepSeek のキーではなくゲートウェイのキー（このコンピュータでは <code>magpie</code>）を入れます。export するか、<code>~/.dsh/.env</code> に書くか、dsh のモデルページの DeepSeek 行に入力します。モデルは dsh で選びます。magpie で接続を解除してもこの設定は残ります。magpie には Files API がないため、dsh は画像を毎ターン base64 でインライン送信します。上限は <code>maxInlineRequestImageBytes</code>（既定 20 MiB、上の例では 64 MiB）です。この行では DeepSeek 自身のモデルだけを使ってください。<a href="https://github.com/yetone/magpie/blob/main/docs/reference.md#deepseek-harness-the-deepseek-row-by-hand">詳しくはリファレンスへ</a>。</p>
     <p style="margin-top:48px">困ったときや、共有したい構成があるときは <a href="https://discord.gg/vGSnD3ZKQF">Discord</a> でどうぞ。ユーザーにすぐ使えるプロバイダを配りたいベンダーの方は <a href="/docs/ja/import">magpie に追加</a> をご覧ください。</p>
   </article>
 </main>
@@ -303,6 +326,7 @@ IP-CIDR6,::1/128,DIRECT,no-resolve</pre>
     <a href="/docs/ja/remote">リモート magpie</a>
     <a href="/docs/ja/docker">Docker</a>
     <a href="/docs/ja/privacy">プライバシー</a>
+    <a href="/docs/ja/masking">プライバシーマスキング</a>
     <a href="/docs/ja/import">magpie に追加</a>
     <a href="/docs/integrate">アプリ連携</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>

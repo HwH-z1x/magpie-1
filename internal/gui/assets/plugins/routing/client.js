@@ -21,6 +21,7 @@ magpie.plugin("routing", (ctx) => {
     title: "Routing",
     html: `
     <div class="row-head"><span class="label" data-t>Routing</span><span class="rt-livedot" aria-hidden="true"></span><span class="note" data-t>live, as the gateway decides</span><span class="grow"></span>
+      <button class="text rt-gogroups" id="rtGoGroups" type="button" data-tt="Go to the routing groups, below the requests"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v9.5M4 8.5l4 4 4-4"/></svg><span data-t>Routing groups</span></button>
       <button class="text rt-newgroup" id="rtNewGroup" type="button" data-feature="groups" data-tt="Make a routing group of any models you like — agents pick it as one model"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9"/></svg><span data-t>New group</span></button>
       <button class="text rt-mask" id="rtMask" aria-pressed="false" data-tt="Mask the accounts on this page — email addresses and account names — for a screenshot to share"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.9 4.2A10.4 10.4 0 0 1 12 4c6.5 0 10 8 10 8a17.6 17.6 0 0 1-2.2 3.2M6.6 6.6C3.9 8.4 2 12 2 12s3.5 8 10 8a9.7 9.7 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2M2 2l20 20"/></svg><span data-t>Hide accounts</span></button></div>
     <section class="rt" id="rt"></section>
@@ -310,6 +311,19 @@ function routingPage(part) {
   // now is the gateway's time — or, in a replay, the time it is replaying
   const now = () => rp ? rp.real : Date.now() + skew;
   const at = (s) => new Date(s).getTime();
+  // when each rest was lifted by hand, by the key it rests by (#1869), on
+  // the gateway's clock: here, or anywhere else the trace tells of
+  // (d.lifted: the provider's editor's Try now, a key's new value)
+  const liftedAt = new Map();
+  function noteLifted(m) {
+    for (const [k, v] of Object.entries(m || {})) if (at(v) > (liftedAt.get(k) || 0)) liftedAt.set(k, at(v));
+  }
+  // lifted: the rest by key, found at found, was lifted since — by the
+  // time shown, so a replay of a request before the lift shows its rest
+  const lifted = (key, found) => { const l = liftedAt.get(key) || 0; return !!key && l >= found && l <= now(); };
+  // sunkKey is what a row sank by, as its rest's key is (restKey): an
+  // account by its provider and user, a key by its own id
+  const sunkKey = (w) => w.kind === "account" && w.who ? w.provider + "@" + w.who.toLowerCase() : w.id;
   const known0 = (s) => s && !s.startsWith("0001-");
   function dur(ms) {
     const s = Math.max(1, Math.round(ms / 1000));
@@ -369,7 +383,10 @@ function routingPage(part) {
     // Input excludes both cache tiers. Include writes in the denominator,
     // and every billable try, as the request's cost does. Older history
     // without the tiers cannot tell a hit rate, even when it has tokens.
+    // A vendor that counts no cache tokens (cache_unknown: Kiro tells
+    // credits only) has no hit rate, not 0%.
     for (const u of r.usage || []) {
+      if (u.cache_unknown) continue;
       read += u.cache_read || 0;
       prompt += (u.in || 0) + (u.cache_read || 0) + (u.cache_write || 0);
     }
@@ -552,6 +569,9 @@ function routingPage(part) {
       case "window": return t("Its allowance is used up: it rests until that renews, at {time}", { time });
       case "resets": return t("It rests until {time}, when the vendor says the limit resets", { time });
       case "quota": return t("It rests 15 minutes: out of quota, with no word of when it resets");
+      // a Codex account that holds credits, refused again once asked
+      // again onto them: not benched until its window renews
+      case "credits": return t("It holds credits, so it rests only {d} and its usage is read again, not until its allowance renews", { d });
       case "verify": return t("The vendor wants the account verified first: it rests half an hour, or until you say it's verified");
       // its provider set never to rest after an unknown failure
       // (`magpie provider rest-cap <id> off`): asked again next time
@@ -575,6 +595,29 @@ function routingPage(part) {
   // an agent's subagents that magpie put a subagent on in its place
   const wentOn = (r) => (r.subagent && !r.subagent.kept ? r.subagent.to : r.model);
 
+  // the routing of the group x's place is in: the innermost group in the
+  // group (via), else the group asked for; "" when no group was
+  const placeRouting = (r, x) => {
+    const via = x.via || [];
+    return via.length ? r.group?.subs?.find((s) => s.id === via[via.length - 1])?.routing || "" : r.group?.routing || "";
+  };
+  // a group routed in order or by weight tries each member whole, in its
+  // place, over its own accounts or keys as its provider routes them
+  // (planLevel): its members aren't weighed against each other
+  const wholeMembers = (r, x) => !!r.group && ["order", "weight"].includes(placeRouting(r, x));
+  // weighedWith is the rows x was weighed against, x among them: in a
+  // group routed in order or by weight, its own member's; else every one
+  // in its place (the group's own, or one group in it). A fallback is
+  // weighed with its own provider's alone (plan). bitssly on X: an In
+  // order group said its later members, whose allowance isn't known, went
+  // after the first because the first's was
+  function weighedWith(r, x) {
+    const via = (y) => (y.via || []).join(">");
+    const whole = wholeMembers(r, x);
+    return r.order.filter((y) => !!y.fallback === !!x.fallback && via(y) === via(x)
+      && (!(x.fallback || whole) || (y.provider === x.provider && y.model === x.model && (y.fixed || "") === (x.fixed || "") && !!y.fast === !!x.fast)));
+  }
+
   // why routing put the first where it did
   function firstWhy(r) {
     const f = r.order[0];
@@ -591,6 +634,17 @@ function routingPage(part) {
     if (f.fallback) {
       const name = r.order.find((x) => !x.fallback)?.name || r.provider;
       return t("{name} is resting, so its fallback {fb} goes first.", { name, fb: `${f.provider}/${f.model}` });
+    }
+    if (wholeMembers(r, f)) {
+      // first as the group's member: by its place, or the round's pick;
+      // weighed only against its own member's others, if any
+      const own = weighedWith(r, f);
+      if (own.length > 1) return firstWhy({ ...r, order: own, group: null });
+      if (placeRouting(r, f) === "weight") return t("By weight: it's {who}'s share — each model takes requests as the weight set beside it says.", { who: w });
+      const ahead = r.order.filter((x) => x !== f && x.rest).map(who);
+      return ahead.length
+        ? t("In order: with {rested} resting after a failure, {who} is the first that can answer.", { rested: ahead.join(", "), who: w })
+        : t("In order: {who} is first, and answers everything while it can.", { who: w });
     }
     const peers = r.order.filter((x) => x !== f && !x.fallback && !x.rest);
     const someKnown = r.order.some((x) => x.known);
@@ -632,6 +686,7 @@ function routingPage(part) {
     if (f.kind !== "account" && !f.known) return t("{who} goes first.", { who: w });
     if (f.learns && peers.some((p) => p.known)) return t("{who} goes first: what it has left isn't known yet, and its answer tells — kept behind those known, it would never answer and never be known.", { who: w });
     if (!f.known && !peers.some((p) => p.known)) return t("The vendor hasn't said yet what these accounts have left, so they go in their order: {who} first.", { who: w });
+    if (group(f) === "spent" && f.credits) return t("Every account is all but used up, so {who} goes first: it goes on on its credits, which the vendor spends once its allowance is used up.", { who: w });
     if (group(f) !== "fine") return r.order.some((x) => x.kind !== "account" && x.known)
       ? t("Every key and account here is at 90% or more of its allowance, so the one with the most left goes first: {who}, at {n}.", { who: w, n: pct(f.used) })
       : t("Every account is at 90% or more of its allowance, so the one with the most left goes first: {who}, at {n}.", { who: w, n: pct(f.used) });
@@ -646,9 +701,38 @@ function routingPage(part) {
     return t("{who} goes first, in the order given: when its allowance renews isn't known.", { who: w });
   }
 
+  // memberSplit: the group that put x behind f, when it is one that takes
+  // its members whole (by weight, in order) and f and x are of different
+  // members of it — with the names of those members and the group; null
+  // when they are of one member, or of a group that pools its members'
+  // accounts (Smart and the rest), where what x has left is why
+  function memberSplit(r, f, x) {
+    if (!r.group) return null;
+    const fv = f.via || [], xv = x.via || [];
+    const subOf = (id) => r.group.subs?.find((s) => s.id === id);
+    const at = (w, v, i) => i < v.length ? "group/" + v[i] : `${w.provider}/${w.model}${w.fixed ? ":" + w.fixed : ""}`;
+    const named = (w, v, i) => i < v.length ? subOf(v[i])?.name || v[i] : w.name || w.provider;
+    let g = r.group;
+    for (let i = 0; i <= Math.max(fv.length, xv.length); i++) {
+      const a = at(f, fv, i), b = at(x, xv, i);
+      if (a !== b) {
+        const routing = g?.routing || "";
+        if (routing !== "weight" && routing !== "order") return null;
+        // the first there by the round's pick, or by the order, not kept
+        // on for its conversation or sent there by a rule
+        if (routing === "weight" ? !f.turn : r.affinity?.kept || r.rule && !r.rule.bare) return null;
+        return { routing, member: named(x, xv, i), first: named(f, fv, i), group: g.name || g.id };
+      }
+      if (i >= fv.length || i >= xv.length) return null; // one member
+      g = subOf(fv[i]);
+    }
+    return null;
+  }
+
   // asides: the others' places, where they say something
   function asides(r) {
     const out = [];
+    const told = new Set(); // the members told as behind by weight or order
     const aff = affWhy(r, true) ? null : affWhy(r, false);
     if (aff) out.push(aff);
     const cls = classWhy(r.rule);
@@ -670,14 +754,30 @@ function routingPage(part) {
       if (p.byFolder) out[out.length - 1] += " " + (p.folder ? t("The agent works in {folder}.", { folder: p.folder }) : t("The agent didn't say which folder it works in."));
     }
     const smart = (x) => !x.routing && (x.kind === "account" || x.known);
-    const someKnown = r.order.some((x) => x.known);
+    // weighed with one known: its place among them is what Smart says
+    const someKnown = (x) => weighedWith(r, x).some((y) => y !== x && y.known);
+    const f0 = r.order[0];
     for (const x of r.order.slice(1)) {
+      // behind the first by a group's weights or its order, which take
+      // each member whole: not by what x has left (Creat.wu: a group in
+      // a group by weight, its accounts at 91%, read as passed over)
+      const by = !x.rest && !x.sunk && f0 ? memberSplit(r, f0, x) : null;
+      if (by && smart(x) && (x.known ? group(x) === "low" : someKnown(x))) {
+        if (!told.has(by.member)) {
+          told.add(by.member);
+          out.push(by.routing === "weight"
+            ? t("{member} isn't passed over for being near its limit: by weight this request was {first}'s share, and {member} takes its own share of the requests while it can answer.", { member: by.member, first: by.first })
+            : t("{member} isn't passed over for being near its limit: it comes after {first} in {group}'s order.", { member: by.member, first: by.first, group: by.group }));
+        }
+        continue;
+      }
       if (x.sunk && !x.rest) out.push(t("{who} was rate limited at {time} while it had quota left, so it went to the back: it comes round again once those ahead of it are rate limited in turn.", { who: who(x), time: clock(x.sunk) }));
       else if (x.rest) out.push(t("{who} is resting — {why}, {when} — so it waits at the back.", { who: who(x), why: `${x.rest.status} · ${failWord(x.rest.why)}`, when: restWhen(x.rest, at(r.time)) }));
-      else if (smart(x) && x.known && group(x) === "spent") out.push(t("{who} is at {n} — all but used up, it answers only when nothing else can.", { who: who(x), n: pct(x.used) }));
-      else if (smart(x) && x.known && group(x) === "low") out.push(t("{who} is at {n} — kept for when the others can't.", { who: who(x), n: pct(x.used) }));
-      else if (smart(x) && x.learns && someKnown) out.push(t("{who}: what it has left isn't known yet, and its answer tells, so it goes before those known.", { who: who(x) }));
-      else if (smart(x) && !x.known && someKnown) out.push(t("{who}: what it has left isn't known yet, so it goes after those known.", { who: who(x) }));
+      else if (smart(x) && x.known && group(x) === "spent" && x.credits) out.push(t("{who} is at {n} of its allowance but goes on on its credits — ahead of those used up with nothing to go on with, after those with allowance left.", { who: who(x), n: pct(x.used) }));
+      else if (smart(x) && x.known && group(x) === "spent" && weighedWith(r, x).length > 1) out.push(t("{who} is at {n} — all but used up, it answers only when nothing else can.", { who: who(x), n: pct(x.used) }));
+      else if (smart(x) && x.known && group(x) === "low" && weighedWith(r, x).length > 1) out.push(t("{who} is at {n} — kept for when the others can't.", { who: who(x), n: pct(x.used) }));
+      else if (smart(x) && x.learns && someKnown(x)) out.push(t("{who}: what it has left isn't known yet, and its answer tells, so it goes before those known.", { who: who(x) }));
+      else if (smart(x) && !x.known && someKnown(x)) out.push(t("{who}: what it has left isn't known yet, so it goes after those known.", { who: who(x) }));
     }
     const pooled = r.order.find((x) => !x.aside && x.kind === "key");
     for (const x of r.order.filter((x) => x.aside)) out.push(t("{who} is made for {api}, not {other} as the keys routed over are, so it isn't one of them: it's tried after them.", { who: who(x), api: API[x.speaks] || x.speaks || t("any API"), other: API[pooled?.speaks] || pooled?.speaks || t("any API") }));
@@ -723,7 +823,7 @@ function routingPage(part) {
       case "rule": {
         // the group's rule, or that of a group in it, that moved it
         const x = r.nested?.findLast((n) => n.rule?.use && !n.rule.unready && !n.rule.held)?.rule || r.rule;
-        return t("{who} answered this conversation last, but a new turn begins and the group's rule {n} puts {use} first.", { who: last, n: x?.n, use: useName(r, x?.use) });
+        return t("{who} answered this conversation last, but a new turn begins and the group's rule {n} puts {use} first.", { who: last, n: x?.n, use: useName(r, x?.instead && !x.unready ? x.instead : x?.use) });
       }
     }
     return null;
@@ -739,11 +839,16 @@ function routingPage(part) {
     // the folder the agent said it works in, when a rule asks for one
     const dir = x.folder ? " " + t("The agent works in {folder}.", { folder: x.folder }) : "";
     if (x.use && !x.unready) {
+      // the rule's first had none to take it, and its next went first
+      const first = x.use;
+      if (x.instead) x.use = useName(r, x.instead);
       const held = t("Rule {n} ({when}) sent turn {turn} to {use} as it began; the turn stays with whoever took it then.", { n: x.n, when, turn: x.turn, use: x.use });
       if (x.compact) return lead ? t("The agent is compacting the conversation, so rule {n} sends the summary to {use}; the conversation stays on the model it was on.", { n: x.n, use: x.use }) + (x.small?.length ? " " + t("Passed over, as the conversation is longer than they take: {models}.", { models: x.small.map((id) => useName(r, id)).join(", ") }) : "") : null;
       if (x.held) return lead || affWhy(r, true) ? held : null;
       if (x.grown) return lead ? t("Within turn {turn} the conversation grew to about {tokens} tokens, more than the model it was on takes, so rule {n} ({when}) moves it to {use}.", { turn: x.turn, tokens: tokens(x.tokens), n: x.n, when, use: x.use }) : null;
       if (!lead) return null;
+      if (x.instead) return t("Rule {n} matches, but {use} has no account or key that can take this request, so {instead}, which the rule names after it, goes first.", { n: x.n, use: first, instead: x.use }) + dir;
+      if (x.more?.length) return t("Turn {turn} begins and rule {n} matches — {when} — so {use} goes first, then {more}, which the rule names after it; the later rules' and the group's others stay behind them.", { turn: x.turn, n: x.n, when, use: x.use, more: x.more.map((id) => useName(r, id)).join(", ") }) + dir;
       if (x.then?.length) return t("Turn {turn} begins and rule {n} matches — {when} — so {use} goes first; if it fails, {then}, which the rules after it that match too name, then the group's others.", { turn: x.turn, n: x.n, when, use: x.use, then: x.then.map((id) => useName(r, id)).join(", ") }) + dir;
       return t("Turn {turn} begins and rule {n} matches — {when} — so {use} goes first; the group's others stay behind it if it fails.", { turn: x.turn, n: x.n, when, use: x.use }) + dir;
     }
@@ -771,6 +876,11 @@ function routingPage(part) {
     });
     return out + "]".repeat(open.length);
   }
+  // rUses is the models a rule sends to, in order: its use, then its
+  // more; setUses writes them back, each once, the first as its use (a
+  // rule of one model has no more, as one saved before it)
+  const rUses = (r) => [r.use, ...(r.more || [])].filter(Boolean);
+  const setUses = (r, ids) => { const u = [...new Set(ids.filter(Boolean))]; r.use = u[0] || ""; if (u.length > 1) r.more = u.slice(1); else delete r.more; };
   // useName is what a rule sends to: a model, or a group in the group
   // a group magpie found goes by the id agents pick it by (auto/<model>), not its internal group/auto-…
   const useName = (r, id) => {
@@ -786,9 +896,10 @@ function routingPage(part) {
       const x = n.rule, g = n.name || n.group;
       if (!x) continue;
       const when = (x.when || []).map(condText).join(", ");
-      if (x.use && x.instead) out.push(t("In {group}, rule {n} matches, but {use} has no account or key that can take this request, so a later matching rule puts {instead} first.", { group: g, n: x.n, use: x.use, instead: x.instead }));
+      if (x.use && x.instead && !x.unready && !x.held) out.push(t("In {group}, rule {n} matches, but {use} has no account or key that can take this request, so {instead}, which the rule names after it, goes first there.", { group: g, n: x.n, use: x.use, instead: x.instead }));
+      else if (x.use && x.instead && x.unready) out.push(t("In {group}, rule {n} matches, but {use} has no account or key that can take this request, so a later matching rule puts {instead} first.", { group: g, n: x.n, use: x.use, instead: x.instead }));
       else if (x.use && x.unready) out.push(t("In {group}, rule {n} matches, but {use} has no account or key that can take this request, so {group}'s order stands.", { group: g, n: x.n, use: x.use }));
-      else if (x.use && x.held) out.push(t("In {group}, rule {n} ({when}) sent turn {turn} to {use} as it began; the turn stays with whoever took it then.", { group: g, n: x.n, when, turn: x.turn, use: x.use }));
+      else if (x.use && x.held) out.push(t("In {group}, rule {n} ({when}) sent turn {turn} to {use} as it began; the turn stays with whoever took it then.", { group: g, n: x.n, when, turn: x.turn, use: x.instead || x.use }));
       else if (x.use) out.push(t("In {group}, rule {n} matches — {when} — so {use} goes first there.", { group: g, n: x.n, when, use: x.use }));
       else if (!x.waits) out.push(t("In {group}, no rule matches.", { group: g }));
     }
@@ -978,9 +1089,10 @@ function routingPage(part) {
   const WB_REFUSED = "WorkBuddy refuses chats from Codex and Claude Code (their system prompt); use it from Hermes, OpenCode or Pi, or add another provider to this group";
   // what it adds to a vendor's edge firewall's block page (provider.BlockedHint)
   const BLOCKED = "the provider's network firewall blocked requests from this IP; wait a while, or switch to another network or proxy";
-  // what it says of ZCode's Start Plan turning a request away (#425,
-  // provider.ZCodeStartBlockedHint), in place of BLOCKED
-  const ZCODE_BLOCKED = "ZCode's Start Plan still turned this request away, though magpie sends it as the ZCode app does; it can be a network block of this IP, or ZCode checking for something new. Use an account with a GLM Coding Plan, or add another provider to this group";
+  // what the ZCode plugin adds to the Start Plan's 405 code 3012, an
+  // account ZCode's risk control blocked (provider.ZCodeRestrictedHint,
+  // plugins#348)
+  const ZCODE_BLOCKED = "ZCode's risk control blocked this account for unusual activity (code 3012); it rests, and the group's other providers are used. If the ZCode app fails on this account too, only ZCode support can lift the block";
   // what it adds to Antigravity's 429 for Claude Code's and the Agent SDK's
   // system prompt (antigravityTurnedAwayHint, #666, #1425)
   const AG_TURNED_AWAY = "Antigravity answers this 429 to the system prompt of Claude Code and the Claude Agent SDK (Claude Desktop's chats) whatever quota is left, so it is not a quota and waiting won't help; use another provider for these chats, or put one after Antigravity in a routing group";
@@ -1005,6 +1117,9 @@ function routingPage(part) {
     // it was spent for is the one that then answered
     const spent = tr.reset && tr.status < 400
       ? t("Its week was used up, so one of {account}'s Codex resets was used by itself first.", { account: userShown(w?.provider, tr.reset.who) }) + " "
+      // Codex's own sign-in asked again onto its credits: the one try
+      : tr.credits && tr.status < 400
+      ? t("Its allowance had just run out and it was refused, so it was asked again at once to spend its credits.") + " "
       : "";
     if (tr.status < 400 && tr.fail)
       return tr.rest
@@ -1020,6 +1135,11 @@ function routingPage(part) {
     if (tr.reset)
       return t("{who} answered {status}: its week is used up and nobody else could take the request, so one of {account}'s Codex resets was used by itself and the request is asked again, before any of the reply reaches {agent}.",
         { who: name, status: tr.status, account: userShown(w?.provider, tr.reset.who), agent });
+    // a Codex account that holds credits, refused as its allowance ran
+    // out: asked again at once, for the vendor to spend its credits
+    if (tr.credits)
+      return t("{who} answered {status}: its allowance had just run out, but the account holds credits, which the vendor spends once the allowance is used up, so it is asked again at once, before any of the reply reaches {agent}.",
+        { who: name, status: tr.status, agent });
     if (tr.fail === "canceled")
       return t("{agent} canceled the request while {who} was answering: nobody failed, so nobody rests and nobody else is asked.", { who: name, agent });
     if (tr.fail === "auth")
@@ -1801,9 +1921,15 @@ function routingPage(part) {
       // rest of one model only: the account's other models' rows don't
       // rest with it (#1960)
       const r = src().get(row.rid) || pinned || cur, answered = new Set(), rests = new Map(), gave = new Map(), went = new Map();
-      const restAt = (id, m, rest) => { const rm = restModel(rest, m); rests.set(rm ? id + "\u0000" + rm : id, rest); };
+      // a rest lifted since it was found (#1869), here or in the
+      // provider's editor, is over: the row doesn't say it until the next
+      // request is refused again (zoecats on Discord)
+      const restAt = (id, m, rest, found) => {
+        if (lifted(rest.key, found)) return;
+        const rm = restModel(rest, m); rests.set(rm ? id + "\u0000" + rm : id, rest);
+      };
       const modelOf = (tr) => tried(r, tr)?.model || tr.model || "";
-      for (const w of r.order) if (w.rest) restAt(w.id, w.model, w.rest);
+      for (const w of r.order) if (w.rest) restAt(w.id, w.model, w.rest, at(r.time));
       for (const tr of r.tries) {
         if (tr.done && tryOk(tr)) answered.add(tryseat(r, tr));
         // the error the agent got: the last try's, once the request is
@@ -1811,8 +1937,8 @@ function routingPage(part) {
         else if (tr.done && !tr.rest && !tr.again && !tr.earlier && r.done && tr === r.tries[r.tries.length - 1]) gave.set(tryseat(r, tr), tr);
         // one the gateway went on from says what it answered, and that the
         // request went on, not that the agent got it
-        else if (tr.done && !tr.rest && !tr.again && tr !== r.tries[r.tries.length - 1]) went.set(tryseat(r, tr), tr);
-        if (tr.rest) restAt(tr.id, modelOf(tr), tr.rest);
+        else if (tr.done && !tr.rest && !tr.again && !tr.credits && tr !== r.tries[r.tries.length - 1]) went.set(tryseat(r, tr), tr);
+        if (tr.rest) restAt(tr.id, modelOf(tr), tr.rest, at(tr.start) + (tr.ms || 0));
       }
       // it answered: whatever rest it began in is over
       for (const tr of r.tries) if (tr.done && tryOk(tr)) { rests.delete(tr.id); rests.delete(tr.id + "\u0000" + modelOf(tr)); }
@@ -1827,10 +1953,11 @@ function routingPage(part) {
       else if (gave.has(id)) s = t("{status} · {fail} · passed to {agent}", { status: gave.get(id).status, fail: failWord(gave.get(id).fail), agent: agentName(r.agent) });
       else if (went.has(id)) s = t("{status} · {fail} · went on to the next", { status: went.get(id).status, fail: failWord(went.get(id).fail) });
       else if (w.noURL) s = noURLWord(w);
-      else if (w.sunk) s = t("rate limited at {time} · at the back", { time: clock(w.sunk) });
+      else if (w.sunk && !lifted(sunkKey(w), at(w.sunk))) s = t("rate limited at {time} · at the back", { time: clock(w.sunk) });
       else if (w.known) {
         const soon = usedRenews(w);
-        s = !w.routing && w.used >= 98 ? quota(w, "{n} used · all but used up", "{n} left · all but used up")
+        s = !w.routing && w.used >= 98 && w.credits ? quota(w, "{n} used · on credits", "{n} left · on credits")
+          : !w.routing && w.used >= 98 ? quota(w, "{n} used · all but used up", "{n} left · all but used up")
           : !w.routing && w.used >= 90 ? quota(w, "{n} used · kept for last", "{n} left · kept for last")
           : soon ? quota(w, "{n} used · renews in {d}", "{n} left · renews in {d}", { d: dur(soon - n) }) : quota(w, "{n} used", "{n} left");
       } else if (w.kind === "account") s = t("what's left not known yet");
@@ -2016,40 +2143,43 @@ function routingPage(part) {
     bodies.replaceChildren(grid);
   }
   // holdStory keeps the story of the live request, its head and its lines,
-  // as tall as the tallest of the last few requests answered, at this
+  // as tall as the tallest of the last few requests told, at this
   // width: a request under way is told in fewer lines than one answered
   // ("is answering…", then "answered in 4.0 s…" over two lines at a
   // phone's width), and its head gets View usage and Replay, taller than
   // the words, once it is done. So each new request moved the context
   // window under it up and back down (dumplings on Discord: the card
-  // jittered on every request). Only the last STORY_HELD answered count: one
+  // jittered on every request). Only the last STORY_HELD told count: one
   // told in many lines (a request handed on from member to member) no
   // longer holds the box that tall for good, and it shrinks back once
   // that many shorter ones have come after it (夜松云 on Discord: the box
-  // grew and never shrank back). A request picked, a replay or a past day
-  // is drawn at its own height. A change of width measures it again at
+  // grew and never shrank back). Each request told counts, answered or
+  // under way, at the height it has now: on a busy gateway a request is
+  // answered as the next starts, the two come in one trace, and the
+  // newest is always under way, so counting only those told answered
+  // held the long one for good (shensmart on Discord, a remote magpie in
+  // a local browser: the room grew with use). A request picked, a replay
+  // or a past day is drawn at its own height. A change of width measures it again at
   // once, as it is then (the list coming in under it can take a
   // scrollbar's width off it before the first live request)
   const STORY_HELD = 3;
-  let storyHold = { key: "", done: new Map() }, storyDrawn = "";
+  let storyHold = { key: "", told: new Map() }, storyDrawn = "";
   function holdStory() {
     const follow = !pinned && !rp && !day;
     const w = steps.clientWidth;
     const key = JSON.stringify([follow, w, document.documentElement.lang]);
     if (key === storyHold.key && storyDrawn === headKey + stepsKey) return;
-    if (key !== storyHold.key) storyHold = { key, done: new Map() };
+    if (key !== storyHold.key) storyHold = { key, told: new Map() };
     storyDrawn = headKey + stepsKey;
     [logHead, steps].forEach((e) => { e.style.minHeight = ""; });
     if (!follow || !w || !logR) return;
     const hs = [logHead, steps].map((e) => e.getBoundingClientRect().height);
-    // an answered request's own height, kept by its id: the last few only
-    if (logR.done) {
-      storyHold.done.set(logR.id, hs);
-      const ids = [...storyHold.done.keys()].sort((x, y) => y - x);
-      for (const id of ids.slice(STORY_HELD)) storyHold.done.delete(id);
-    }
+    // a request's own height as told now, kept by its id: the last few only
+    storyHold.told.set(logR.id, hs);
+    const ids = [...storyHold.told.keys()].sort((x, y) => y - x);
+    for (const id of ids.slice(STORY_HELD)) storyHold.told.delete(id);
     [logHead, steps].forEach((e, i) => {
-      const held = Math.max(0, ...[...storyHold.done.values()].map((h) => h[i]));
+      const held = Math.max(0, ...[...storyHold.told.values()].map((h) => h[i]));
       if (held > hs[i]) e.style.minHeight = held + "px";
     });
   }
@@ -2268,11 +2398,27 @@ function routingPage(part) {
   // for: a vendor serving a cheaper model in its place, which only the
   // reply's model field tells (its dated name is the same model)
   function swapTag(tr, short) {
-    const k = el("span", "swap", short ? t("served {served}", { served: tr.served }) : t("requested {sent} · served {served}", { sent: tr.model, served: tr.served }));
+    const route = clineRoute(tr);
+    const k = el("span", "swap", short ? t(route ? "ClinePass route {served}" : "served {served}", { served: tr.served })
+      : t(route ? "requested {sent} · ClinePass route {served}" : "requested {sent} · served {served}", { sent: tr.model, served: tr.served }));
     k.title = swapWhy(tr);
     return k;
   }
-  const swapWhy = (tr) => t("The vendor was asked for {sent}, but its reply says {served} answered: likely another model. The same model under a dated name or spelled otherwise isn't marked.", { sent: tr.model, served: tr.served });
+  // ClinePass names a reply by the route it picked (its VMC,
+  // vmc/deepseek-v4p1-flash-1017-contributor-fallbacks), not by a model:
+  // such a reply is said as its route, with what was asked of it and
+  // whether it said who answered (zRain on Discord, 10-24). pin is the
+  // provider the try asked for; a Usage row doesn't keep it (pinUnknown).
+  const clineRoute = (tr) => /^vmc\//.test(tr.served || "") && /(^|\/)cline-pass\//.test(tr.model || "");
+  function swapWhy(tr, o = {}) {
+    if (!clineRoute(tr)) return t("The vendor was asked for {sent}, but its reply says {served} answered: likely another model. The same model under a dated name or spelled otherwise isn't marked.", { sent: tr.model, served: tr.served });
+    const s = t("ClinePass answered {sent} through {served}, a route it picks itself: the name is the route's, not another model's.", { sent: tr.model, served: tr.served });
+    if (tr.upstream) return s + " " + t("Its reply says {upstream} answered.", { upstream: tr.upstream });
+    if (o.pinUnknown) return s + " " + t("Its reply didn't say which provider answered.");
+    if (tr.pin) return s + " " + t("{pin} was asked for, but its reply didn't say which provider answered, so whether ClinePass kept to it is unknown.", { pin: tr.pin });
+    const tick = /(^|\/)cline-pass\/(deepseek|glm)/i.test(tr.model) ? " " + t("To ask for the maker's own API, tick “{tick}” in the provider's settings.", { tick: t("DeepSeek and GLM models only from their makers' own APIs") }) : "";
+    return s + " " + t("No provider was asked for, and its reply didn't say which one answered.") + tick;
+  }
   window.swapWhy = swapWhy; // the Usage page's Requests say it too
   // a try that asked a remote magpie for one of its routing groups: the
   // reply names the member the group routed to, which is the group
@@ -2307,7 +2453,7 @@ function routingPage(part) {
       ? t("{agent} requested a subagent; magpie selects its model within this routing group.", { agent })
       : t("{agent} requested a subagent on {model}.", { agent, model: r.model });
     if (purposeOf(r.kind) === "kind:ambient_suggestions") return t("{agent} drafted the suggested prompts on its home page by itself, in the background, searching the project's files and connected apps, and checked them for safety. Not a turn of the conversation; Codex's Settings › Configuration › Suggested prompts turns it off.", { agent });
-    if (purposeOf(r.kind) === "kind:composer_predictions") return t("{agent} guessed your next message for its composer by itself, reading the whole conversation again. Not a turn of the conversation; Settings › General › Codex composer predictions picks its model, and Codex's Settings › General › Show predictions turns it off.", { agent });
+    if (purposeOf(r.kind) === "kind:composer_predictions") return t("{agent} guessed your next message for its composer by itself, reading the whole conversation again. Not a turn of the conversation; Codex composer predictions, under Settings in Codex's row on the Agents page, picks its model, and Codex's Settings › General › Show predictions turns it off.", { agent });
     if (r.kind === "luna_reserve") return t("{agent} sent this turn on Luna Reserve, which it turns to once the plan's own allowance is used up; it picks the model itself.", { agent });
     // the searcher asked first failed or found nothing, and this one
     // searched in its place: say which and why, not just who searched
@@ -2964,8 +3110,6 @@ function routingPage(part) {
       + (x.resetsAt ? " · " + resetInText(new Date(x.resetsAt)) : "")) : [];
   }
 
-  // when each rest was lifted by hand, by the key it rests by (#1869)
-  const liftedAt = new Map();
   // modelRest keeps the latest word of one of an account's models resting
   // alone (#1960)
   function modelRest(a, m, rest, when) {
@@ -3011,8 +3155,8 @@ function routingPage(part) {
     // a rest lifted by hand since the request that found it (#1869): the
     // kept requests still say it, until the next one asks it again
     for (const a of by.values()) {
-      if (a.rest?.key && (liftedAt.get(a.rest.key) || 0) >= a.restAt) a.rest = null;
-      for (const [m, x] of a.mrests) if (x.rest.key && (liftedAt.get(x.rest.key) || 0) >= x.at) a.mrests.delete(m);
+      if (a.rest && lifted(a.rest.key, a.restAt)) a.rest = null;
+      for (const [m, x] of a.mrests) if (lifted(x.rest.key, x.at)) a.mrests.delete(m);
     }
     const list = [...by.values()].sort((x, y) => (x.w.name || "").localeCompare(y.w.name || "") || x.w.provider.localeCompare(y.w.provider) || rankOf(x.w) - rankOf(y.w) || x.pos - y.pos);
     setText(actLabel, t("Accounts and keys"));
@@ -3120,7 +3264,7 @@ function routingPage(part) {
         if (rest.why !== "restricted" && rest.why !== "verify") go.title = t("Ends the rest: the next request asks it again. Refused again, it rests again.");
         go.onclick = async () => {
           try {
-            for (const x of lifts) { await api("gateway/unrest", { key: x.key }); liftedAt.set(x.key, Date.now()); }
+            for (const x of lifts) { await api("gateway/unrest", { key: x.key }); liftedAt.set(x.key, Date.now() + skew); }
             render();
           } catch (e) { go.textContent = e.message; }
         };
@@ -3346,7 +3490,7 @@ function routingPage(part) {
         renderAll();
         dot.classList.add("back", "err");
         back = bird("res");
-        if (!tr.rest && (!tr.again || tr.gone)) { // that was the answer: the agent gets the error, or has gone
+        if (!tr.rest && !tr.credits && (!tr.again || tr.gone)) { // that was the answer: the agent gets the error, or has gone
           await fly(dot, back, home(row, A), 1350);
           flying.delete(dot);
           away(back);
@@ -3703,6 +3847,7 @@ function routingPage(part) {
         const d = await res.json();
         heard = true;
         noteAccounts(d);
+        noteLifted(d.lifted);
         skew = at(d.now) - Date.now();
         mine = d.mine;
         // another magpie took the gateway over (#2606): its routes and seq
@@ -3992,6 +4137,7 @@ function routingPage(part) {
       "This routing group will no longer be available to agents.")) return;
     try {
       groups = groupsFrom(await api("groups/" + action, body));
+      if (action === "save" && gEdit) { gMorph = [gEdit.id, body.id]; gSaved = body.id; }
       gEdit = null;
       renderGroups();
       // The editor closed on its Save, and the page is shorter by its height: the
@@ -4004,7 +4150,7 @@ function routingPage(part) {
       // opens under (backToReader, app.js, guards the same way).
       const saved = body.id || body.from || "";
       const row = saved && document.querySelector(`#view-routing .rt-group[data-id="${CSS.escape(saved)}"]`);
-      const view = row && document.getElementById("view-routing");
+      const view = row && gFolded !== saved && document.getElementById("view-routing");
       if (view) {
         const rr = row.getBoundingClientRect(), vb = view.getBoundingClientRect();
         if (rr.bottom > vb.bottom || rr.top < vb.top) { readerScrolls(1000); row.scrollIntoView({ block: "nearest" }); }
@@ -4029,15 +4175,32 @@ function routingPage(part) {
   const deciderOf = (id) => groups?.deciders?.find((m) => m.id === splitMember(id)[0]);
   const modelOf = (id) => groups?.models.find((m) => m.id === id) || groups?.models.find((m) => m.id === splitMember(id)[0]) || deciderOf(id);
   // a group's patterns (#766, provider.IsPattern): a glob, * any run of
-  // characters over the provider/model id in any case, or re:<regexp> over
-  // the whole id. The group keeps them, and the models they match now
-  // follow those it names, in the catalog's order (Group.Matched)
+  // characters over the provider/model id, or re:<regexp> over the whole
+  // id, both in any case (provider.compilePattern). The group keeps them,
+  // and the models they match now follow those it names, in the catalog's
+  // order (Group.Matched)
   const isPattern = (s) => s.startsWith("re:") || s.includes("*");
   function patternRe(p) {
     try {
-      if (p.startsWith("re:")) return p.length > 3 ? new RegExp("^(?:" + p.slice(3) + ")$") : null;
+      if (p.startsWith("re:")) return goRe(p.slice(3));
       return new RegExp("^" + p.split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$", "i");
     } catch { return null; }
+  }
+  // goRe is a re: pattern's regexp as Go reads it, in any case: Go's
+  // leading flag group, "(?-i)" to make case matter, is JS's flags (U,
+  // ungreedy, changes no whole-id match). null when it has none or JS
+  // can't read it.
+  function goRe(src) {
+    if (!src.trim()) return null;
+    const flags = new Set(["i"]);
+    const lead = /^\(\?([imsU]*)(?:-([imsU]*))?\)/.exec(src);
+    if (lead) {
+      if (!lead[1] && !lead[2]) return null;
+      for (const f of lead[1]) if (f !== "U") flags.add(f);
+      for (const f of lead[2] || "") flags.delete(f);
+      src = src.slice(lead[0].length);
+    }
+    return new RegExp("^(?:" + src + ")$", [...flags].join(""));
   }
   // the models served now the patterns match, but those the group names
   // (at any reasoning): as provider.matchesIn finds them
@@ -4062,7 +4225,7 @@ function routingPage(part) {
   // there, rather than leaving the slot empty.
   const openGroupEditor = async (g) => {
     if (groupDirty() && !(await confirmDiscard())) return false;
-    gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", ruleScope: g.ruleScope || "", sink: !!g.sink, unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: patienceOf(g.patience), context: g.context || 0, classifier: g.classifier || "", effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
+    gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", ruleScope: g.ruleScope || "", sink: !!g.sink, unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: patienceOf(g.patience), context: g.context || 0, classifier: g.classifier || "", effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
     renderGroups();
     return true;
   };
@@ -4222,8 +4385,108 @@ function routingPage(part) {
       rows.push(h);
     }
     // the import box's text stays in the page as the list is drawn again
+    const was = slotsOf();
     replaceKeeping(gList, rows);
+    morphSlots(was);
     renderPools();
+  }
+  // A group's row opens into its editor and folds back into it, as a cell
+  // does on iOS (the owner, 10-23): its slot goes from the height it had to
+  // its new one, on a spring as it opens and on iOS's ease as it folds, the
+  // list below moving with it, and what is in it comes in as it does. A
+  // group saved shows it with a check by its name.
+  // gMorph: the editor's slot to the group's row after a Save, which may
+  // name the group anew (a new group, an id changed); gSaved: the group just
+  // saved
+  // gFolded: the slot whose fold keeps itself in sight, as groupAction
+  // would after a Save
+  let gMorph = null, gSaved = null, gFolded = null;
+  const slotKey = (n) => n.dataset?.gslot;
+  function slotsOf() {
+    const m = new Map(), vt = document.getElementById("view-routing").getBoundingClientRect().top;
+    for (const n of gList.children) {
+      const k = slotKey(n);
+      if (k === undefined) continue;
+      const b = n.getBoundingClientRect();
+      m.set(k, { n, h: b.height, top: b.top - vt, ed: n.classList.contains("rt-gedit") });
+    }
+    return m;
+  }
+  function morphSlots(was) {
+    const alias = gMorph, saved = gSaved;
+    gMorph = gSaved = gFolded = null;
+    if (still() || !shown()) return;
+    for (const n of gList.children) {
+      const k = slotKey(n);
+      if (k === undefined) continue;
+      const ed = n.classList.contains("rt-gedit");
+      const old = was.get(k) || (alias && alias[1] === k ? was.get(alias[0]) : undefined);
+      if (old?.n === n) continue;
+      // a new group's editor grows out of nothing at the list's top
+      const from = old ? (old.ed === ed ? null : old.h) : ed && k === "" ? 0 : null;
+      if (from != null) slotMorph(n, from, ed, old?.top);
+      if (!ed && saved === k) savedMark(n);
+    }
+  }
+  function slotMorph(n, from, opening, top) {
+    const to = n.getBoundingClientRect().height;
+    if (Math.abs(to - from) < 1) return false;
+    const shape = opening ? { duration: 570, easing: SPRING } : { duration: 420, easing: IOS_EASE };
+    n.style.overflow = "hidden";
+    const grow = n.animate([{ height: from + "px" }, { height: to + "px" }], shape);
+    grow.finished.then(() => { n.style.overflow = ""; }, () => { n.style.overflow = ""; });
+    if (!opening && top < 0) foldInSight(n, grow, from, to, top);
+    if (opening) {
+      // its parts come in from just above, one after another; those past
+      // the first dozen together
+      let i = 0;
+      for (const c of n.children) {
+        c.animate([{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }],
+          { duration: 420, delay: 40 + Math.min(i++, 12) * 18, easing: IOS_EASE, fill: "backwards" });
+      }
+    } else {
+      for (const c of n.children) c.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, delay: 90, easing: "ease-out", fill: "backwards" });
+    }
+  }
+  // foldInSight: an editor folded from its foot (Save and Cancel are there)
+  // would leave the page shorter under the reader, and the browser's clamp
+  // would land them at the list's foot with the row above the window. The
+  // page goes up with the fold instead, step for step with the slot's
+  // height, until the row's top is the window's — as the reader's own
+  // scroll, since it answers their click. top is how far the editor's top
+  // was above the window's; the page's scroll is read once the redraw
+  // has put it back (steady).
+  function foldInSight(n, grow, from, to, top) {
+    const view = document.getElementById("view-routing");
+    readerScrolls(1000);
+    let s0, target;
+    const step = () => {
+      if (s0 === undefined) { s0 = view.scrollTop; target = s0 + top; }
+      if (!n.isConnected) return;
+      const p = grow.playState === "finished" ? 1 : Math.min(1, Math.max(0, (from - n.getBoundingClientRect().height) / (from - to)));
+      view.scrollTop = s0 + (target - s0) * p;
+      if (p < 1 && grow.playState === "running") requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+    gFolded = n.dataset.gslot;
+  }
+  // savedMark: the row of the group just saved lights up and a check pops
+  // in by its name, then both go
+  function savedMark(row) {
+    row.animate([{ backgroundColor: "color-mix(in srgb, var(--accent) 16%, transparent)" }, { backgroundColor: "color-mix(in srgb, var(--accent) 16%, transparent)", offset: 0.35 }, { backgroundColor: "transparent" }],
+      { duration: 1400, easing: "ease-out" });
+    const nm = row.querySelector(".nm");
+    if (!nm) return;
+    const ok = el("span", "rt-gsaved");
+    ok.setAttribute("aria-hidden", "true");
+    ok.append(svg(CHECK, 11, 2));
+    nm.append(ok);
+    ok.animate([{ opacity: 0, transform: "scale(.4)" }, { opacity: 1, transform: "none" }], { duration: 570, easing: SPRING });
+    const path = ok.querySelector("path");
+    const len = path.getTotalLength?.() || 14;
+    path.animate([{ strokeDasharray: len, strokeDashoffset: len }, { strokeDasharray: len, strokeDashoffset: 0 }], { duration: 360, delay: 120, easing: IOS_EASE, fill: "backwards" });
+    ok.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 400, delay: 1500, easing: "ease-in", fill: "forwards" })
+      .finished.then(() => ok.remove(), () => ok.remove());
   }
   // Copy to share (laincatx on X): the group as text, its models, routing
   // and rules and no key (provider.ShareGroup), for anyone to paste into
@@ -4319,7 +4582,7 @@ function routingPage(part) {
     if (groupDirty() && !(await confirmDiscard())) return;
     const g = tp.group;
     gSel = null;
-    gEdit = { id: "", draft: { name: tplName(tp), slug: g.id, members: [...g.members], match: [], matched: [], fast: [], off: [], routing: g.routing || "", affinity: "", rules: (g.rules || []).map((r) => ({ ...r, intent: r.intent || "", agents: [...(r.agents || [])], folders: [], exceptFolders: [], time: null })), classifier: g.classifier || "", effort: "", levels: [] } };
+    gEdit = { id: "", draft: { name: tplName(tp), slug: g.id, members: [...g.members], match: [], matched: [], fast: [], off: [], routing: g.routing || "", affinity: "", rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [], exceptFolders: [], time: null })), classifier: g.classifier || "", effort: "", levels: [] } };
     renderGroups();
     const ed = gList.querySelector(".rt-gedit");
     if (ed && window.scrollOnPurpose?.(ev)) ed.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -4491,7 +4754,7 @@ function routingPage(part) {
   }
   function groupRow(g) {
     const row = el("div", "rt-group" + (g.ready ? "" : " off") + (g.disabled ? " disabled" : ""));
-    row.dataset.id = g.id;
+    row.dataset.id = row.dataset.gslot = g.id;
     const ics = groupHandle(g, row);
     const main = el("div", "main");
     const nm = el("div", "nm");
@@ -4519,7 +4782,7 @@ function routingPage(part) {
     }
     const m = withJS(GROUP_ROUTE_OPTS, g.routing).find(([id]) => id === (g.routing || "")) || ROUTE_OPTS[0];
     const tags = el("span", "tags");
-    tags.append(el("span", "tag", t(m[1])));
+    tags.append(routeTag(g, m));
     if (g.ruleScope === "request") tags.append(el("span", "tag", t("Per-request decision")));
     if (g.affinity) tags.append(el("span", "tag", t(AFF_OPTS.find(([id]) => id === g.affinity)?.[1] || "")));
     if (g.sink && sinkable(g.routing || "")) {
@@ -4535,7 +4798,7 @@ function routingPage(part) {
     if (g.firstToken > 0 && !manual) tags.append(el("span", "tag", t("Next after {n} without a first token", { n: took(g.firstToken * 1000) })));
     if (g.rules?.length) {
       const r = el("span", "tag" + (manual ? " idle" : ""), t(g.rules.length === 1 ? "1 rule" : "{n} rules", { n: g.rules.length }));
-      r.title = (manual ? t("The rules wait while you pick the model by hand.") + "\n" : "") + g.rules.map((x, i) => `${i + 1}. ${ruleText(x)} → ${x.pause ? t("pause") + " " : ""}${memberLabel(g, x.use)}${x.useEffort ? " · " + t("{level} reasoning", { level: x.useEffort }) : ""}`).join("\n");
+      r.title = (manual ? t("The rules wait while you pick the model by hand.") + "\n" : "") + g.rules.map((x, i) => `${i + 1}. ${ruleText(x)} → ${x.pause ? t("pause") + " " : ""}${rUses(x).map((u) => memberLabel(g, u)).join(", ")}${x.useEffort ? " · " + t("{level} reasoning", { level: x.useEffort }) : ""}`).join("\n");
       tags.append(r);
     }
     if (g.disabled) tags.append(el("span", "tag idle", t("switched off")));
@@ -4566,6 +4829,36 @@ function routingPage(part) {
       row.append(sw);
     }
     return row;
+  }
+  // routeTag: a group's routing on its row, a button that opens the
+  // routings the editor offers, the current one checked (MoChou, #3450).
+  // Picking one saves the group as the editor's Save would with only its
+  // routing changed: Manual keeps the pick it had, the gateway's first
+  // member when it had none (provider.cleanGroup), as the editor does.
+  function routeTag(g, m) {
+    const cur = g.routing || "";
+    const b = el("button", "tag rt-groute");
+    b.type = "button";
+    b.setAttribute("aria-haspopup", "menu");
+    b.setAttribute("aria-expanded", "false");
+    b.setAttribute("aria-label", t("Routing") + " · " + g.name + " · " + t(m[1]));
+    b.title = t("How {name} routes: click to change it", { name: g.name });
+    b.append(el("span", "", t(m[1])), svg(CHEV, 10, 1.8));
+    b.onclick = (e) => {
+      e.stopPropagation(); // the card opens the editor; this its routing
+      if (b.classList.contains("open")) return closeProtoMenu();
+      const opts = withJS(GROUP_ROUTE_OPTS, cur);
+      openProtoMenu(b, opts.map(([id, n]) => ({ v: id, name: n, note: "", title: GROUP_HINT[id] ? t(GROUP_HINT[id]) : modeOf(id)[1] })), cur, async (v) => {
+        closeProtoMenu();
+        if (v === cur || (groupDirty() && !(await confirmDiscard()))) return b.focus({ preventScroll: true });
+        const n = opts.find(([id]) => id === v)?.[1] || v;
+        await groupAction("save", { id: g.id, name: g.name, members: namedOf(g), match: g.match || [], routing: v, pick: g.pick || "", affinity: g.affinity || "", sink: !!g.sink && sinkable(v), firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, unlists: !!g.unlists },
+          t("{name}: {routing}", { name: g.name, routing: t(n) }));
+        // the rows were drawn anew: the keyboard stays on this one's routing
+        gList.querySelector(`.rt-group[data-id="${CSS.escape(g.id)}"] .rt-groute`)?.focus({ preventScroll: true });
+      }, "Routing", "", "right");
+    };
+    return b;
   }
   // groupHandle is a group row's logos, which are also its handle, as an
   // agent row's logo is (#779): drag it to move the row, click it (or
@@ -4703,6 +4996,7 @@ function routingPage(part) {
     for (const k of ["members", "match", "matched", "fast", "off", "rules"]) if (!Array.isArray(d[k])) d[k] = [];
     if (!d.weights || typeof d.weights !== "object") d.weights = {};
     const ed = el("div", "editor rt-gedit");
+    ed.dataset.gslot = g ? g.id : "";
     const h = el("div", "ehead");
     h.append(el("b", "", g ? g.name : t("New group")));
     if (g?.auto) h.append(el("span", "note", t("found by magpie — saving a change makes it yours")));
@@ -4917,7 +5211,7 @@ function routingPage(part) {
             if (d.members.includes(to)) { status(t("{name} at that reasoning is in the group already", { name: memberName(id) }), "err"); return; }
             d.members[i] = to;
             d.matched = d.matched.filter((x) => x !== id); // named now, at its own reasoning
-            for (const r of d.rules) if (r.use === id) r.use = to;
+            for (const r of d.rules) setUses(r, rUses(r).map((x) => x === id ? to : x));
             d.fast = d.fast.map((x) => x === id ? to : x);
             d.off = d.off.map((x) => x === id ? to : x);
             if (d.weights[id]) { d.weights[to] = d.weights[id]; delete d.weights[id]; }
@@ -5024,7 +5318,8 @@ function routingPage(part) {
       const named = d.members.filter((x) => !d.matched.includes(x));
       d.matched = matchedBy(d.match, named);
       d.members = [...named, ...d.matched];
-      d.rules = d.rules.filter((r) => d.members.includes(r.use));
+      // a rule keeps the models still here; it goes with its last
+      d.rules = d.rules.filter((r) => { setUses(r, rUses(r).filter((x) => d.members.includes(x))); return !!r.use; });
       d.fast = d.fast.filter((x) => d.members.includes(x));
       d.off = d.off.filter((x) => d.members.includes(x));
     }
@@ -5277,6 +5572,37 @@ function routingPage(part) {
       b.style.width = `clamp(6ch, ${w}px, 44ch)`;
       if (!b.isConnected) requestAnimationFrame(() => { if (b.isConnected) fitBox(b); });
     };
+    // moveRule puts the rule at `from` at `to` and keeps the keyboard on
+    // the same control of the moved rule (its handle, or its ⋯)
+    const moveRule = (from, to, keep) => {
+      if (to < 0 || to >= d.rules.length || to === from) return;
+      d.rules.splice(to, 0, d.rules.splice(from, 1)[0]);
+      drawRules();
+      if (keep) rlist.querySelectorAll(keep)[to]?.focus({ preventScroll: true });
+    };
+    // ruleHandle is a rule's number, which is also its handle (monkeyin_92
+    // on X): drag it to move the rule, or Alt+↑/↓ from the keyboard, as a
+    // model's number does; Move up and down stay under ⋯. The grip shows
+    // only on hover.
+    const ruleHandle = (i, row) => {
+      const b = el("button", "i ag-handle rt-rhandle", String(i + 1));
+      b.type = "button";
+      b.dataset.at = i;
+      b.setAttribute("aria-label", t("Move rule {n}", { n: i + 1 }));
+      b.title = t("Drag to reorder · Alt+↑/↓ to move");
+      b.onkeydown = (e) => {
+        if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        moveRule(i, i + (e.key === "ArrowUp" ? -1 : 1), ".rt-rhandle");
+      };
+      b.onclick = (e) => { e.stopPropagation(); delete b.dataset.dragged; };
+      b.onpointerdown = (e) => {
+        const rows = [...rlist.children].filter((r) => r.classList.contains("rt-rule"));
+        dragRows(e, b, row, rlist, rows, (to) => moveRule(i, to));
+      };
+      return b;
+    };
     const drawRules = () => {
       drawCtx(); // the members' windows changed with them
       rlist.replaceChildren();
@@ -5503,22 +5829,61 @@ function routingPage(part) {
         then.append(el("span", "rt-arrow", "→"));
         then.lastChild.setAttribute("aria-hidden", "true");
         // the member it sends to
-        const ub = el("button", "rt-cond on rt-model");
-        const drawUse = () => { const note = memberNote(r.use); ub.replaceChildren(memberIcon(r.use), el("span", "", note ? `${memberName(r.use)} · ${note}` : r.use)); };
+        // the members it sends to, in order (monkeyin_92 on X: one rule,
+        // several models, not a rule each): the first goes first, the
+        // next when it fails or rests, then the later rules' and the
+        // group's others. A pause names one.
+        const ub = el("span", "rt-line rt-uses");
+        const drawUse = () => {
+          const uses = rUses(r);
+          ub.replaceChildren();
+          uses.forEach((u, k) => {
+            const b = el("button", "rt-cond on rt-model");
+            b.type = "button";
+            const note = memberNote(u);
+            b.append(memberIcon(u), el("span", "", note ? `${memberName(u)} · ${note}` : u));
+            // another of the group's in its place, none the rule names twice
+            b.onclick = (ev) => pickFrom("member", b, ev, d.members.filter((id) => id === u || !uses.includes(id)).map((id) => { const s = subOf(id); return { value: id, label: memberName(id), note: memberNote(id), icon: s ? undefined : modelOf(id)?.icon, icons: s ? groupIcons(s) : undefined }; }),
+              (v) => { const next = rUses(r); next[k] = v; setUses(r, next); drawUse(); warn(); }, u);
+            if (uses.length < 2) { ub.append(b); return; }
+            const w = el("span", "rt-c");
+            const x = el("button", "rt-cx");
+            x.type = "button";
+            x.title = t("Remove {name} from this rule", { name: memberName(u) });
+            x.setAttribute("aria-label", x.title);
+            x.append(svg(CROSS, 8, 2));
+            x.onclick = (e) => { e.stopPropagation(); setUses(r, uses.filter((_, j) => j !== k)); drawUse(); warn(); ub.querySelector(".rt-model")?.focus({ preventScroll: true }); };
+            w.append(b, x);
+            ub.append(w);
+          });
+          const left = d.members.filter((id) => !uses.includes(id));
+          if (r.pause || !left.length) return;
+          const add = el("button", "rt-adduse");
+          add.type = "button";
+          add.setAttribute("aria-haspopup", "menu");
+          add.title = t("Add a model it goes to next");
+          add.setAttribute("aria-label", add.title);
+          add.append(svg(PLUS, 11, 1.8));
+          add.onclick = (ev) => pickFrom("member", add, ev, left.map((id) => { const s = subOf(id); return { value: id, label: memberName(id), note: memberNote(id), icon: s ? undefined : modelOf(id)?.icon, icons: s ? groupIcons(s) : undefined }; }),
+            (v) => { setUses(r, [...rUses(r), v]); drawUse(); warn(); ub.querySelector(".rt-adduse")?.focus({ preventScroll: true }); });
+          ub.append(add);
+        };
         drawUse();
-        ub.onclick = (ev) => pickFrom("member", ub, ev, d.members.map((id) => { const s = subOf(id); return { value: id, label: memberName(id), note: memberNote(id), icon: s ? undefined : modelOf(id)?.icon, icons: s ? groupIcons(s) : undefined }; }),
-          (v) => { r.use = v; drawUse(); warn(); });
         const hint = el("span", "rt-rwarn");
         const need = el("div", "rt-rneed");
         const warn = () => {
           need.hidden = !(refused.has(r) && bareRule(r));
           need.textContent = need.hidden ? "" : t(r.pause ? "A pause needs hours, days, agents or folders. Add one with its +, or remove the rule from its ⋯ menu" : "This rule has no condition. Add one with its +, or remove the rule from its ⋯ menu");
-          const m = infoOf(r.use), bits = [];
+          const bits = [], uses = rUses(r);
           if (r.pause) bits.push(t("left out of the group then: not tried, not a fallback"));
-          if (!r.pause && r.images && m && m.ready && !m.images) bits.push(t("it doesn't take images"));
-          if (!r.pause && r.tokens && m?.context && m.context < r.tokens) bits.push(t("it takes {n} tokens", { n: m.context.toLocaleString(intlLang()) }));
-          // a summary longer than it takes goes by the next rule, or the group
-          if (!r.pause && r.compact && m?.context && d.members.some((id) => (infoOf(id)?.context || 0) > m.context)) bits.push(t("longer conversations skip it: it takes {n} tokens", { n: m.context.toLocaleString(intlLang()) }));
+          // each model the rule names, by name when it names more than one
+          for (const u of r.pause ? [] : uses) {
+            const m = infoOf(u), of = (s) => bits.push(uses.length > 1 ? `${memberName(u)}: ${s}` : s);
+            if (r.images && m && m.ready && !m.images) of(t("it doesn't take images"));
+            if (r.tokens && m?.context && m.context < r.tokens) of(t("it takes {n} tokens", { n: m.context.toLocaleString(intlLang()) }));
+            // a summary longer than it takes goes by the rule's next, the next rule, or the group
+            if (r.compact && m?.context && d.members.some((id) => (infoOf(id)?.context || 0) > m.context)) of(t("longer conversations skip it: it takes {n} tokens", { n: m.context.toLocaleString(intlLang()) }));
+          }
           const from = clockOf(r.time?.from), to = clockOf(r.time?.to);
           if (from && to && to < from) bits.push(t("runs past midnight, into the next day"));
           hint.textContent = bits.join(" · ");
@@ -5531,8 +5896,10 @@ function routingPage(part) {
         // from there or from the rule's menu.
         const setAct = (v) => {
           r.pause = v === "pause";
-          // what a pause doesn't take is cleared, not kept out of sight
+          // what a pause doesn't take is cleared, not kept out of sight;
+          // it pauses the rule's first model alone
           if (r.pause) {
+            delete r.more;
             Object.assign(r, { tokens: 0, images: false, effort: "", intent: "", compact: false, useEffort: "" });
             for (const [k, , p] of COND_KINDS) if (!p) openedOf(r).delete(k);
           }
@@ -5570,7 +5937,7 @@ function routingPage(part) {
         more.setAttribute("aria-label", t("Actions for rule {n}", { n: i + 1 }));
         more.title = t("Actions for rule {n}", { n: i + 1 });
         more.append(svg(DOTS, 14, 2.2));
-        const move = (to) => { d.rules.splice(to, 0, d.rules.splice(i, 1)[0]); drawRules(); rlist.querySelectorAll(".rt-rmore")[to]?.focus({ preventScroll: true }); };
+        const move = (to) => moveRule(i, to, ".rt-rmore");
         more.onclick = () => {
           const again = agentMenu?.anchor === more;
           closeAgentMenu();
@@ -5585,7 +5952,7 @@ function routingPage(part) {
             { name: "Remove rule", icon: CROSS, sep: true, run: () => { d.rules.splice(i, 1); drawRules(); } },
           ]);
         };
-        row.append(el("span", "i", String(i + 1)), line, then, more, need);
+        row.append(ruleHandle(i, row), line, then, more, need);
         rlist.append(row);
       });
       drawClassifier();
@@ -5868,6 +6235,38 @@ function routingPage(part) {
     if (!groups) await loadGroups();
     if (groups) newGroup(ev);
   };
+  // the head's Routing groups: the groups sit below the stage, the story
+  // and every request, a long scroll down with many models (shihh on
+  // Discord). Its click brings them to the top of the view, and the focus
+  // with them, so Tab goes on from there; the page is laid out as before
+  gsec.tabIndex = -1;
+  const headGo = $("#rtGoGroups");
+  if (headGo) headGo.onclick = (ev) => {
+    if (!window.scrollOnPurpose?.(ev)) return;
+    gsec.scrollIntoView({ block: "start", behavior: still() ? "auto" : "smooth" });
+    gsec.focus({ preventScroll: true });
+  };
+  // fitGo: it takes only room the head has spare, so nothing else in the
+  // head moves or wraps for it: named where its name fits, its arrow alone
+  // where only that does, and left out of a head with no room (a phone's)
+  const goHead = headGo?.parentElement, goGrow = goHead?.querySelector(".grow");
+  function fitGo() {
+    if (!goGrow || !goHead.offsetParent) return;
+    headGo.dataset.fit = "none";
+    const room = goGrow.getBoundingClientRect().width, gap = parseFloat(getComputedStyle(goHead).columnGap) || 0;
+    for (const fit of ["full", "icon"]) {
+      headGo.dataset.fit = fit;
+      if (room >= headGo.getBoundingClientRect().width + 6 + gap) return;
+    }
+    headGo.dataset.fit = "none";
+  }
+  let goFitting = 0;
+  const fitGoSoon = () => { if (!goFitting) goFitting = requestAnimationFrame(() => { goFitting = 0; fitGo(); }); };
+  if (goHead) {
+    const ro = new ResizeObserver(fitGoSoon);
+    for (const n of [goHead, ...goHead.querySelectorAll(".label, .note")]) ro.observe(n);
+    new MutationObserver(fitGoSoon).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+  }
   const askedGroup = document.body.classList.contains("window") && params.get("newgroup");
   if (askedGroup) loadGroups().then(() => window.newGroupWith(askedGroup, ""));
   else loadGroups();
@@ -6177,7 +6576,7 @@ function routingPage(part) {
     if (picks) out.push(picks);
     if (!offMsg && loaded && rs.length) out.push(pStage);
     if (offMsg) out.push(el("p", "pr-none", t(offMsg)));
-    else if (!loaded) for (let i = 0; i < 3; i++) out.push(el("span", "skeleton pr-sk-row"));
+    else if (!loaded) out.push(...pGhost());
     else if (!rs.length) {
       const p = el("div", "pr-none");
       p.append(el("b", "", t("No request yet")), t("Every request an agent sends to magpie shows up here, routed for real."));
@@ -6192,6 +6591,28 @@ function routingPage(part) {
     pDraw();
     pWake();
     fit();
+  }
+  // pGhost holds the tab's place while the trace is on its way: the stage
+  // and P_ROWS requests, laid out as they will be and drawn as skeletons,
+  // so the panel, fitted to its tallest tab, doesn't grow when they come
+  // (CyberCaius on Discord). A shorter skeleton had the panel grow on the
+  // first open, and a scrollbar show till it did.
+  function pGhost() {
+    const stage = el("div", "skeleton pr-ghost");
+    stage.append(el("div", "pr-stage"));
+    const list = el("div", "pr-list");
+    for (let i = 0; i < P_ROWS; i++) {
+      const row = el("span", "pr-req");
+      const asked = el("span", "pr-a");
+      asked.append(el("span", "pr-who", "\u00a0"), el("code", "m", "\u00a0"));
+      const line = el("span", "pr-line");
+      line.append(el("span", "pr-to", "\u00a0"), el("span", "meta", "\u00a0"));
+      row.append(asked, el("span", "at", "\u00a0"), line);
+      list.append(row);
+    }
+    const rows = el("div", "skeleton pr-ghost");
+    rows.append(list);
+    return [stage, rows];
   }
   // a Manual group's model, switched here as its card's radios do (#2489,
   // Jerell.OvO on Discord): CC Switch's one provider on at a time, from
@@ -6301,5 +6722,8 @@ function routingPage(part) {
   new ResizeObserver(fitSoon).observe(box);
   words();
   start();
+  // the tray panel's line of today's totals is asked for at once, not
+  // after the trace's first answer, which it doesn't need (CyberCaius)
+  if (pBox) loadToday();
   poll();
 }

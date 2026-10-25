@@ -104,6 +104,9 @@ type providerJSON struct {
 	// may be, being the user's own and not a preset's or a sign-in's
 	InsecureTLS      bool `json:"insecureTLS"`
 	TakesInsecureTLS bool `json:"takesInsecureTLS"`
+	// asked as usual after a quota refusal or a 429, never set aside for
+	// it (provider.LimitRestOff)
+	LimitRestOff bool `json:"limitRestOff"`
 	// Codex's compaction asked of it as Codex sent it, its sealed item
 	// back as it came (provider.NativeCompaction, #1099); CarriesCompaction: its
 	// wire can carry it, so the editor offers it
@@ -487,6 +490,9 @@ type providersJSON struct {
 	// after Codex was switched to another, until it is quit and opened
 	// again (provider.CodexAppStale)
 	CodexApp string `json:"codexApp,omitempty"`
+	// CodexAppOut is a Codex app left unable to send on its used-up
+	// ChatGPT account until it is opened again (codexAppOutState)
+	CodexAppOut *codexAppOutJSON `json:"codexAppOut,omitempty"`
 	// Plugins are the providers the plugins sign in to, for the add sheet
 	Plugins []pluginSubJSON `json:"plugins"`
 	// OnPlugins are the built-in subscriptions moved onto their plugins,
@@ -591,7 +597,7 @@ func providerInfoWith(p provider.Provider, agents []agentUse, desktop map[string
 		ID: p.ID, Name: p.Name, Icon: p.Icon, Preset: p.Preset, Host: p.Host(),
 		Chat: p.Chat, Responses: p.Responses, Anthropic: p.Anthropic, Gemini: p.Gemini, Decide: p.Decide, BaseAPI: p.BaseAPI, ModelTest: p.ModelTest(), TestsAs: p.TestClients(), DecideTest: p.AsksDecideModels(), MarksKinds: p.MarksKinds(),
 		Catalog: p.Catalog, Website: p.Website, KeysURL: p.KeysURL,
-		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: p.PassUserAgent, OwnClient: p.OwnClient(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, ModelsURL: p.ModelsURL,
+		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), LimitRestOff: p.LimitRestOff, NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: p.PassUserAgent, OwnClient: p.OwnClient(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, ModelsURL: p.ModelsURL,
 		Ready: p.Ready(), Chosen: p.Picks(), Models: []modelJSON{}, Agents: []providerAgent{},
 		Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, Unlisted: p.Unlisted, NoModels: p.ServesNone(), Off: p.Off, Contexts: p.Contexts,
 		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), PriceRate: p.PriceRate,
@@ -955,6 +961,7 @@ func providersState() providersJSON {
 	s.Gateway.Archive = archiveState()
 	s.CodexDaemon = provider.CodexDaemonStale()
 	s.CodexApp = provider.CodexAppStale()
+	s.CodexAppOut = codexAppOutState()
 	s.Plugins = pluginSubs()
 	s.Fetching = provider.FetchingNew()
 	return s
@@ -1150,6 +1157,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// host is taken unchecked (#2383); a save that leaves it out
 			// keeps it
 			InsecureTLS *bool `json:"insecureTLS"`
+			// LimitRestOff is whether a quota refusal or a 429 leaves it
+			// asked as usual; a save that leaves it out keeps it
+			LimitRestOff *bool `json:"limitRestOff"`
 			// MaxConcurrency is how many requests each of its keys or
 			// accounts has out at once: a number (0 none), null for what
 			// its plugin says or none; a save that leaves it out keeps it
@@ -1472,6 +1482,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if req.InsecureTLS != nil {
 					in.InsecureTLS = *req.InsecureTLS
 				}
+				if req.LimitRestOff != nil {
+					in.LimitRestOff = *req.LimitRestOff
+				}
 				add := provider.Add
 				if req.CopyOf != "" {
 					add = func(p provider.Provider) (string, error) { return provider.AddCopy(p, req.CopyOf) }
@@ -1503,6 +1516,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					in.InsecureTLS = *req.InsecureTLS
 				} else if old != nil {
 					in.InsecureTLS = old.InsecureTLS
+				}
+				if req.LimitRestOff != nil {
+					in.LimitRestOff = *req.LimitRestOff
+				} else if old != nil {
+					in.LimitRestOff = old.LimitRestOff
 				}
 				if keepCC && old != nil {
 					in.MaxConcurrency = old.MaxConcurrency
@@ -1748,7 +1766,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				fail(rw, err)
 				return
 			}
-			agent.SyncCatalog()
+			agent.SyncCatalogSoon()
 		case "accountmodels":
 			if err := provider.SetAccountModels(in.ID, req.Account, req.Allow); err != nil {
 				fail(rw, err)
@@ -1807,7 +1825,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				fail(rw, err)
 				return
 			}
-			agent.SyncCatalog()
+			agent.SyncCatalogSoon()
 		case "switchonly":
 			// magpie only switches Codex's own sign-in, its requests going
 			// straight to OpenAI, or routes them for failover again
@@ -1816,7 +1834,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				fail(rw, err)
 				return
 			}
-			agent.SyncCatalog()
+			agent.SyncCatalogSoon()
 		case "affinity":
 			if err := provider.SetAffinity(in.ID, in.Affinity); err != nil {
 				fail(rw, err)
@@ -2049,7 +2067,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		}
 		// an agent on its own models goes through magpie while more of
 		// its accounts are on, and straight to its vendor again once not
-		agent.SyncCatalog()
+		agent.SyncCatalogSoon()
 		st := providersState()
 		st.Moved = moved
 		writeJSON(rw, st)
@@ -2077,6 +2095,22 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			return
 		}
 		writeJSON(rw, providersState())
+	})
+	// The Codex desktop app left on the model list before a change (the
+	// Agents row's Restart): quit it and open it again.
+	mux.HandleFunc("POST /api/codex/app/reopen", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ Bundle string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+		defer cancel()
+		if err := agent.ReopenCodexApp(ctx, in.Bundle); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, map[string]bool{"ok": true})
 	})
 	// A provider's several keys: add one, put one in use, name or remove it.
 	mux.HandleFunc("POST /api/keys/{action}", func(rw http.ResponseWriter, r *http.Request) {
@@ -2218,7 +2252,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			fail(rw, err)
 			return
 		}
-		agent.SyncCatalog()
+		agent.SyncCatalogSoon()
 		writeJSON(rw, struct {
 			Results   []provider.ImportedAccount `json:"results"`
 			Providers providersJSON              `json:"providers"`

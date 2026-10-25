@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"net/url"
 	"os"
@@ -157,6 +158,17 @@ type Settings struct {
 	// RequestArchiveMaxMB is how much of each body the archive keeps, in
 	// MiB: 0 for 32, at most 1024 (#447)
 	RequestArchiveMaxMB int `json:"requestArchiveMaxMB,omitempty"`
+	// RequestArchiveLocal keeps the request archive on this computer's disk,
+	// in magpie's folder (gateway/archive_local.go), while sync has no S3
+	// bucket for it (CyberCaius on Discord). Its own switch, separate from
+	// RequestArchive, which sync carries to every computer: this computer's
+	// own (KeepOwn), so a request body is written to a disk only where the
+	// user turned it on.
+	RequestArchiveLocal bool `json:"requestArchiveLocal,omitempty"`
+	// RequestArchiveLocalMB is how large the archive on this computer grows
+	// before its oldest calls are removed, in MiB: 0 for 1024. In
+	// settings.json only; this computer's own (KeepOwn).
+	RequestArchiveLocalMB int `json:"requestArchiveLocalMB,omitempty"`
 	// GatewayConversations is local, opt-in recording of session traffic.
 	// Only SetGatewayConversations changes it; other saves keep local consent.
 	GatewayConversations bool `json:"gatewayConversations,omitempty"`
@@ -340,6 +352,11 @@ type Settings struct {
 	// than 5): from 1 to ImageTimeoutMost, 0 for ImageTimeoutDefault.
 	// ImageWait reads it.
 	ImageTimeout int `json:"imageTimeout,omitempty"`
+	// ClassifyTimeout is how long, in seconds, a routing group's classifier
+	// is given to say which intent a turn is (#2934: a Kiro subscription's
+	// haiku needed more than 8): from 1 to ClassifyTimeoutMost, 0 for
+	// ClassifyTimeoutDefault. ClassifyWait reads it.
+	ClassifyTimeout int `json:"classifyTimeout,omitempty"`
 	// Searcher is the provider that searches the web for a model that
 	// can't: "<provider>" with the small model magpie picks of it,
 	// "<provider>/<model>", or empty for the one magpie picks
@@ -646,7 +663,10 @@ type Settings struct {
 	ModelNames map[string]string `json:"modelNames,omitempty"`
 	// ModelEfforts are the reasoning levels the user keeps of a model's,
 	// by "<provider id>/<model id>": the lists magpie hands out offer only
-	// those (see provider.SetModelEfforts).
+	// those, while the vendor is still asked at any level it has; for a
+	// model with no levels known they are the levels given it, and the
+	// gateway fits a request to them (see provider.SetModelEfforts,
+	// magpie model spec).
 	ModelEfforts map[string][]string `json:"modelEfforts,omitempty"`
 	// ModelReasonless are the models the user said take no reasoning ask,
 	// by "<provider id>/<model id>": magpie offers them no levels and
@@ -703,6 +723,15 @@ type Settings struct {
 	// that model's maker's price (provider.SamePriceIn, #2344). Absent
 	// leaves it to its id.
 	ModelSameAs map[string]string `json:"modelSameAs,omitempty"`
+	// UsageAliases are the model ids the user counts as one in Usage and
+	// Sessions, from an id to the name it is counted under
+	// ("deepseek-v4.1-flash": "deepseek-flash", SlouchyQuill507 on
+	// Discord): what spent the same model under two names is one row there.
+	// Only how usage is grouped and shown changes: no request, model list
+	// or price reads it (provider.SetUsageAlias). Keyed by a bare model id,
+	// not "<provider>/<model>", so it is not named Model* and is not one
+	// of the per-model maps a provider's rename moves. Absent is none.
+	UsageAliases map[string]string `json:"usageAliases,omitempty"`
 	// ModelKinds is what the user said a model makes, by "<provider
 	// id>/<model id>": "image" or "video", for a provider set up with a
 	// base URL whose own model list doesn't say so (shen-joe, #1399).
@@ -876,6 +905,27 @@ func (s Settings) ImageWait() time.Duration {
 	return time.Duration(min(m, ImageTimeoutMost)) * time.Minute
 }
 
+// ClassifyTimeoutDefault is the seconds a classifier is given when
+// ClassifyTimeout is 0, and ClassifyTimeoutMost the most it can be set to:
+// the turn waits on it before it goes anywhere, with nothing sent to its
+// agent meanwhile.
+const (
+	ClassifyTimeoutDefault = 8
+	ClassifyTimeoutMost    = 60
+)
+
+// ClassifyWait is how long a classifier is given to answer:
+// ClassifyTimeout's seconds, ClassifyTimeoutDefault's when it is 0 (or
+// below), and no more than ClassifyTimeoutMost's when settings.json was
+// written by hand past it.
+func (s Settings) ClassifyWait() time.Duration {
+	n := s.ClassifyTimeout
+	if n < 1 {
+		n = ClassifyTimeoutDefault
+	}
+	return time.Duration(min(n, ClassifyTimeoutMost)) * time.Second
+}
+
 // Themes and Langs are the accepted values, in the order the UI offers them.
 var (
 	Themes     = []string{"system", "light", "dark"}
@@ -1041,6 +1091,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.SessionTerminal = cur.SessionTerminal
 	s.RedactModel = cur.RedactModel
 	s.ClaudeRunsMost = cur.ClaudeRunsMost
+	s.RequestArchiveLocal, s.RequestArchiveLocalMB = cur.RequestArchiveLocal, cur.RequestArchiveLocalMB
 }
 
 // RenamePerModel moves what the user said of a provider's models to the id
@@ -1328,6 +1379,29 @@ func EditCheckinOff(edit func([]string) []string) error {
 	return save(s, false)
 }
 
+// EditUsageAliases changes UsageAliases alone, as edit returns them from
+// what the file holds now, so a save elsewhere from an older snapshot isn't
+// undone. A settings file that can't be read is left as it is, with the
+// error: what it holds is unknown, not "no aliases". edit is given a copy,
+// and an error from it saves nothing.
+func EditUsageAliases(edit func(map[string]string) (map[string]string, error)) error {
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	s, err := loadChecked()
+	if err != nil {
+		return err
+	}
+	m, err := edit(maps.Clone(s.UsageAliases))
+	if err != nil {
+		return err
+	}
+	if len(m) == 0 {
+		m = nil
+	}
+	s.UsageAliases = m
+	return save(s, false)
+}
+
 // SetRedactModel turns the local masking model on or off, on its own, as
 // Settings → Privacy does once the model is downloaded.
 func SetRedactModel(on bool) error {
@@ -1391,6 +1465,9 @@ func save(s Settings, recording bool) error {
 	}
 	if s.ImageTimeout < 0 || s.ImageTimeout > ImageTimeoutMost {
 		return fmt.Errorf("image generation is given from 1 to %d minutes, or 0 for %d, not %d", ImageTimeoutMost, ImageTimeoutDefault, s.ImageTimeout)
+	}
+	if s.ClassifyTimeout < 0 || s.ClassifyTimeout > ClassifyTimeoutMost {
+		return fmt.Errorf("a routing group's classifier is given from 1 to %d seconds, or 0 for %d, not %d", ClassifyTimeoutMost, ClassifyTimeoutDefault, s.ClassifyTimeout)
 	}
 	if s.UsageAlert < 0 || s.UsageAlert > 100 {
 		return fmt.Errorf("a usage alert is at a percentage from 1 to 100, or 0 for off, not %d", s.UsageAlert)

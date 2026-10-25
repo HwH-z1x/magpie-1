@@ -28,16 +28,28 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // RouterAgent is the User-Agent magpie's own classifier calls carry.
 const RouterAgent = "magpie-router/1"
 
 var (
-	classifyTimeout = 8 * time.Second
-	classifyKeep    = 10 * time.Minute // an answer, for the same message and intents
-	classifyRest    = 30 * time.Second // after a failure, before the classifier is asked again
+	classifyKeep = 10 * time.Minute // an answer, for the same message and intents
+	classifyRest = 30 * time.Second // after a failure, before the classifier is asked again
 )
+
+// classifyTimeout is how long the classifier is given to answer, its
+// provider's failover included. It is Settings' Classifier timeout (#2934:
+// a Kiro subscription's haiku needed more than the 8 seconds it was fixed
+// at), read as each turn asks, in classifyUnit seconds.
+func classifyTimeout() time.Duration {
+	return settings.Shared().ClassifyWait() / time.Second * classifyUnit
+}
+
+// classifyUnit is a second of classifyTimeout: a test makes it shorter,
+// rather than wait the seconds out.
+var classifyUnit = time.Second
 
 // classifier asks a model which of intents text is — the intent, or ""
 // for none of them — and, when effort, how much reasoning the turn wants. prev is what
@@ -473,7 +485,8 @@ func (s *Server) askChat(model string, body []byte) (string, error) {
 }
 
 func (s *Server) askChatContext(parent context.Context, model string, body []byte) (string, error) {
-	ctx, cancel := context.WithTimeout(parent, classifyTimeout)
+	wait := classifyTimeout()
+	ctx, cancel := context.WithTimeout(parent, wait)
 	defer cancel()
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://magpie/v1/chat/completions", nil)
 	if err != nil {
@@ -484,7 +497,7 @@ func (s *Server) askChatContext(parent context.Context, model string, body []byt
 	w := httptest.NewRecorder()
 	s.serve(w, r, provider.Chat, body)
 	if ctx.Err() != nil {
-		return "", fmt.Errorf("%s gave no answer in %s", model, classifyTimeout)
+		return "", fmt.Errorf("%s gave no answer in %s", model, wait)
 	}
 	var out struct {
 		Choices []struct {

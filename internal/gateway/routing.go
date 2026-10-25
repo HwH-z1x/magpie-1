@@ -434,10 +434,11 @@ func failureOf(c candidate, status int, body []byte) string {
 // restrictedSaid says an error is one magpie already put in words as an
 // account its vendor restricted: WorkBuddy's 11140 as the built-in
 // translates it, or as the plugin does, both ending in
-// provider.WBRestrictedHint. magpie's own words, which no vendor says, so
-// they are read whoever answered.
+// provider.WBRestrictedHint, and ZCode's Start Plan 3012 as the ZCode
+// plugin puts it (provider.ZCodeRestrictedHint, plugins#348). magpie's own
+// words, which no vendor says, so they are read whoever answered.
 func restrictedSaid(status int, body []byte) bool {
-	return status >= 400 && bytes.Contains(body, []byte(provider.WBRestrictedHint))
+	return status >= 400 && (bytes.Contains(body, []byte(provider.WBRestrictedHint)) || bytes.Contains(body, []byte(provider.ZCodeRestrictedHint)))
 }
 
 // restrictedRefused says p's vendor restricted the account: magpie's words
@@ -522,10 +523,12 @@ type Rest struct {
 func renewed(agent, user string) {
 	restingUntil.Lock()
 	defer restingUntil.Unlock()
+	now := time.Now()
 	for k, r := range restingUntil.note {
 		if r.agent == agent && strings.EqualFold(r.user, user) && (r.Why == failQuota || r.By == "window") {
 			delete(restingUntil.m, k)
 			delete(restingUntil.note, k)
+			liftedLocked(k, now)
 		}
 	}
 }
@@ -534,6 +537,9 @@ func init() { provider.OnRenewed(renewed) }
 
 // staleAllowance is provider.StaleAllowance, swapped in tests.
 var staleAllowance = provider.StaleAllowance
+
+// codexMayBeUsedUp is provider.CodexMayBeUsedUp, swapped in tests.
+var codexMayBeUsedUp = provider.CodexMayBeUsedUp
 
 // awaitAllowance is provider.AwaitAllowance, swapped in tests.
 var awaitAllowance = provider.AwaitAllowance
@@ -586,14 +592,19 @@ var (
 func RestOf(key string) (Rest, bool) { return restOf(key) }
 
 // Unrest lifts the rest of what rests by key — an account just verified
-// with its vendor, say — so the next request asks it again. False when it
-// wasn't resting.
+// with its vendor, say — so the next request asks it again: rate limited
+// with Sink on, it is no longer sent to the back of the order either.
+// The lift is told to the Routing page (TraceState.Lifted), wherever it
+// was asked for. False when it wasn't resting.
 func (s *Server) Unrest(key string) bool {
 	restingUntil.Lock()
-	defer restingUntil.Unlock()
 	_, ok := restingUntil.m[key]
 	delete(restingUntil.m, key)
 	delete(restingUntil.note, key)
+	liftedLocked(key, time.Now())
+	restingUntil.Unlock()
+	unsink(key)
+	s.trace.lifted()
 	return ok
 }
 
@@ -602,15 +613,19 @@ func (s *Server) Unrest(key string) bool {
 // asked again for all of them. It returns how many it lifted.
 func (s *Server) UnrestAll(key string) int {
 	restingUntil.Lock()
-	defer restingUntil.Unlock()
-	n := 0
+	n, now := 0, time.Now()
 	for k := range restingUntil.m {
 		if k == key || strings.HasPrefix(k, key+"/") {
 			delete(restingUntil.m, k)
 			delete(restingUntil.note, k)
+			liftedLocked(k, now)
 			n++
 		}
 	}
+	liftedLocked(key, now)
+	restingUntil.Unlock()
+	unsink(key)
+	s.trace.lifted()
 	return n
 }
 
@@ -749,10 +764,29 @@ func resetsZhipu(body []byte, now time.Time) time.Duration {
 // them, each a number and its unit, and nothing else between.
 var resetsInWords = regexp.MustCompile(`(?i)\bresets? in (?:(\d+)\s*d(?:ays?)?\b\s*)?(?:(\d+)\s*h(?:ours?|rs?)?\b\s*)?(?:(\d+)\s*m(?:in(?:utes?|s)?)?\b)?`)
 
-// resetsAfter is how long the refusal says until it is back (resetsInWords),
-// held to longestWritten. Zero when it doesn't say.
+// quotaResetAfter: Antigravity's (Google Code Assist's) 429 for a model's
+// allowance used up, which writes how long until it is back as Go prints
+// a duration: "You have exhausted your capacity on this model. Your quota
+// will reset after 3h19m30s." Unread, the account rested the quarter of
+// an hour of a quota that says nothing, and the account first in order
+// was asked again, and refused, every 15 minutes for the hours or days
+// its quota was out (Dani Ariyanto on Discord, 10-24).
+var quotaResetAfter = regexp.MustCompile(`(?i)\bquota will reset after ((?:\d+h)?(?:\d+m)?(?:\d+(?:\.\d+)?s)?)`)
+
+// resetsAfter is how long the refusal says until it is back
+// (resetsInWords, quotaResetAfter), held to longestWritten. Zero when it
+// doesn't say.
 func resetsAfter(body []byte) time.Duration {
-	return spanWritten(resetsInWords.FindSubmatch(wordsOf(body)))
+	body = wordsOf(body)
+	if d := spanWritten(resetsInWords.FindSubmatch(body)); d > 0 {
+		return d
+	}
+	if m := quotaResetAfter.FindSubmatch(body); m != nil && len(m[1]) > 0 {
+		if d, err := time.ParseDuration(string(m[1])); err == nil && d > 0 && d <= longestWritten {
+			return d
+		}
+	}
+	return 0
 }
 
 // clineModelLimited says c, a provider whose requests reach Cline's API,
@@ -895,6 +929,16 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// the account is as good as it was; the proxy is the user's to start
 		return r
 	}
+	if c.p.LimitRestOff && (why == failQuota || why == failCredit || why == failRate || status == http.StatusTooManyRequests) {
+		// the user set it never to rest for a limit (provider.LimitRestOff;
+		// zoecats on Discord: a local aggregator says "quota exhausted"
+		// for the moment it switches upstreams, and the next request goes
+		// through): not set aside, sunk or counted, and asked as ever. A
+		// key refused, a model not served or a plain failure rests it as
+		// before
+		r.By, r.Until = "off", now
+		return r
+	}
 	if why == failCredit || why == failQuota {
 		// the vendor's words, for quotaHeld to give again
 		r.said = provider.APIError(body, http.StatusText(status))
@@ -903,6 +947,18 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 	case failCredit:
 		d, r.By = creditRest, "credit"
 	case failQuota:
+		if c.onCredits() {
+			// a Codex account that holds credits refused as out of its
+			// allowance: at the moment a window is used up ChatGPT may
+			// turn a turn away before it spends the credits, and the next
+			// goes through on them (Zhenzhen on Discord: a new session
+			// answered at once). Benched until the window renews, days
+			// off, it would leave its credits unspent; it is asked again
+			// after a moment instead, and the reading asked for again
+			// below tells whether it still holds them
+			d, r.By = fallbackCooldown, "credits"
+			break
+		}
 		// out of quota is out until the quota comes back: when the refusal
 		// says (Claude Code's time, ChatGPT's resets_at — noted by
 		// keepRetry once the error is put in words), else when the window
@@ -1011,6 +1067,11 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 	// by the plugin's provider ("plugin:grok"), not by "plugin"
 	if a := c.p.Account; a != nil && why != failOther && why != failVerify && why != failRestricted {
 		staleAllowance(a.UsageAgent(), a.User) // ask again what it has left
+		if why == failQuota && a.UsageAgent() == "codex" {
+			// the account Codex is signed in to may be out: the Codex app
+			// greys its Send till it knows magpie is its provider
+			codexMayBeUsedUp(a.User)
+		}
 	} else if a == nil && why != failOther && why != failVerify && why != failRestricted {
 		staleKeyAllowance(c.p) // a key that reads its windows, too
 	}
@@ -1195,10 +1256,37 @@ func (s *Server) rateRest(c candidate, header http.Header, body []byte, sharedPo
 // candidate's model renews; zero otherwise. Used up is all but
 // (usedShare), except In order: there an account at 98% is still tried in
 // its turn, and one that fails then isn't benched until its week renews
-// unless the vendor said it was out (#530).
+// unless the vendor said it was out (#530). A Codex account that goes on
+// on its credits is never: a window used up doesn't stop it (onCredits).
 func (c candidate) full(now time.Time) time.Time {
 	a, _ := c.allowance()
+	if spendsCredits(c.p, a) {
+		return time.Time{}
+	}
 	return a.Full(c.model, provider.SpentShareOf(c.p.Routing), now)
+}
+
+// onCredits: c is a Codex account that goes on past its allowance on its
+// credits, as its last reading says, and the user lets it spend them
+// (provider.CodexCredits): its allowance used up, the vendor spends the
+// credits, so it isn't benched until the window renews (豆子 on Discord).
+func (c candidate) onCredits() bool {
+	a, _ := c.allowance()
+	return spendsCredits(c.p, a)
+}
+
+// creditsAgain says whether c, refused with status and body, is asked
+// again at once: a Codex account on its credits (onCredits) that the
+// vendor said is out of its allowance. At the moment a window is used
+// up ChatGPT may refuse the turn before it goes on to the credits; the
+// next request is answered on them.
+func creditsAgain(c candidate, status int, body []byte) bool {
+	return status == http.StatusTooManyRequests && failure(status, body) == failQuota && c.onCredits()
+}
+
+// spendsCredits is onCredits for the account of p, whose allowance is a.
+func spendsCredits(p provider.Provider, a provider.Allowance) bool {
+	return p.Account != nil && p.Account.UsageAgent() == "codex" && a.OnCredits() && provider.CodexCredits(p.Account.User)
 }
 
 // allowance is the candidate's allowance as last known: a subscription
@@ -1348,6 +1436,9 @@ type left struct {
 	// (Allowance.Count): amount of of, in unit
 	amount, of float64
 	unit       string
+	// credits: a Codex account that goes on on its credits once its
+	// allowance is used up (spendsCredits)
+	credits bool
 }
 
 // learns: c is a subscription whose allowance isn't known yet, of an agent
@@ -1420,7 +1511,7 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 			amt, of, unit := a.Count(c.model, now)
 			rs := a.Restarts(now)
 			wg.lefts[c.allowanceKey()] = left{used: u, renews: r, fullest: a.Fullest(c.model, now), soon: a.Renewal(c.model, now), pace: pc, due: due, amount: amt, of: of, unit: unit,
-				restarts: rs, dueRestart: !rs.IsZero() && due.Equal(rs)} // one not known counts as unused
+				restarts: rs, dueRestart: !rs.IsZero() && due.Equal(rs), credits: spendsCredits(c.p, a)} // one not known counts as unused
 		}
 	}
 	if len(cs) < 2 {
@@ -1441,7 +1532,7 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 			pace = provider.FreshPace
 		}
 		seats[i] = routes.Seat{Key: c.rest, Account: c.p.Account != nil, Known: known, Learns: learns(c, wg.lefts),
-			Used: l.used, Soon: l.soon, Pace: pace, Weight: keyWeight(c), Resting: resting(c), Tokens: routed.used[c.restKey()].now(now)}
+			Used: l.used, Soon: l.soon, Pace: pace, Weight: keyWeight(c), Resting: resting(c), Tokens: routed.used[c.restKey()].now(now), Credits: l.credits}
 	}
 	routed.Unlock()
 	if st.ByUse {

@@ -7,12 +7,14 @@ checks that request hooks have no provider badge. `MAGPIE_GATEWAY_ASSETS` select
 an older asset directory for a failing regression comparison; user settings and
 live gateways are never accessed.
 
-`settings-proxy-auth.test.cjs` checks optional SOCKS5/SOCKS5h usernames and
-passwords in Settings, using the real page with isolated API fixtures. It
-covers saving and reloading, escaped and non-UTF-8 credentials, masked
-addresses/status, clearing authentication, Tab and Escape, mode switches,
-HTTP compatibility, and narrow windows in English and Chinese on Chromium
-and WebKit.
+`settings-proxy-auth.test.cjs` checks a proxy's optional username and
+password in Settings, in fields of their own for SOCKS5/SOCKS5h, HTTP,
+HTTPS and bare host:port proxies alike, using the real page with isolated
+API fixtures. It covers saving and reloading, @ : / % # and spaces in a
+password, escaped and non-UTF-8 credentials, a login saved in the address
+before loading into the fields, masked addresses/status, clearing
+authentication, Tab and Escape, mode switches, and narrow windows in all
+five languages on Chromium and WebKit.
 ## Installed desktop fonts
 
 `fonts.test.cjs` exercises the interface/code font controls with installed
@@ -38,6 +40,14 @@ Browser fixtures never read or write user settings, install fonts or contact
 a live gateway.
 
 ## Gateway Caller Keys
+
+`gateway-keys-empty.test.cjs` checks the Gateway page with no gateway key
+yet, as magpie web on a 390px phone: "No gateway keys yet" sits inside the
+list's card, inset from its edges, in the muted colour and size of Recent
+calls' empty line, in Chromium and WebKit, light and dark, and every
+language. A list that can't be read says why in the same card, still there
+after the page is drawn again; a list read before stays when a later read
+fails, and the error goes to the status line.
 
 `gateway-caller-keys.test.cjs` checks the named caller-key list on the
 Gateway page, including creation, copying, renaming, disabling, enabling,
